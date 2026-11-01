@@ -36,6 +36,7 @@ import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.snapTo
 import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -116,7 +117,7 @@ import org.koin.compose.koinInject
  * Activities screen of a package.
  */
 @Composable
-fun HomeScreen(homeSignal: Int = 0, onSettings: () -> Unit = {}, onActivities: (String) -> Unit = {}) {
+fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, onSettings: () -> Unit = {}, onActivities: (String) -> Unit = {}) {
     val model: LauncherModel = koinInject()
     val store: SettingsStore = koinInject()
     val state by model.state.collectAsState()
@@ -178,7 +179,7 @@ fun HomeScreen(homeSignal: Int = 0, onSettings: () -> Unit = {}, onActivities: (
     val layout = PanelLayout(left = settings.swipeRight, right = settings.swipeLeft, bottom = settings.swipeUp)
     HomeContent(
         state, settings.themeMode, actions, panelOpacity = settings.panelOpacity, iconShape = settings.iconShape, themedIcons = settings.themedIcons,
-        edgeTabs = settings.edgeTabs, marks = AppMarks(dots, updates), pinned = pinned, layout = layout, homeSignal = homeSignal
+        edgeTabs = settings.edgeTabs, marks = AppMarks(dots, updates), pinned = pinned, layout = layout, homeSignal = homeSignal, homeAnimated = homeAnimated
     )
 }
 
@@ -204,7 +205,9 @@ fun HomeContent(
     /** Which panel each edge holds. */
     layout: PanelLayout = PanelLayout(),
     /** Goes up each time Home is pressed while the app runs: the open panel closes (Trebuchet's Launcher.onNewIntent closes its floating views). */
-    homeSignal: Int = 0
+    homeSignal: Int = 0,
+    /** False when the system brought the home to the front: the panels then close at once (Trebuchet's alreadyOnHome). */
+    homeAnimated: Boolean = true
 ) {
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
@@ -242,7 +245,16 @@ fun HomeContent(
         scope.launch { side.animateTo(Side.CLOSED, spring) }
         scope.launch { sheet.animateTo(Sheet.CLOSED, spring) }
     }
-    LaunchedEffect(homeSignal) { if (homeSignal > 0) close() }
+    // Trebuchet's Launcher.onNewIntent: goToState(NORMAL, alreadyOnHome), the panel closes by a snap when it was not already on home
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java).
+    LaunchedEffect(homeSignal) {
+        if (homeSignal > 0) {
+            if (homeAnimated) close() else {
+                side.snapTo(Side.CLOSED)
+                sheet.snapTo(Sheet.CLOSED)
+            }
+        }
+    }
     val anyOpen = side.targetValue != Side.CLOSED || sheet.targetValue != Sheet.CLOSED
     // Back on the home screen does nothing: Trebuchet's Launcher.onBackPressed hands Back to its callbacks, ends in the state handler and
     // never calls finish() (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java).
@@ -380,23 +392,31 @@ fun HomeContent(
                 PillMenu(wallpaperMenu, wallpaperItems)
             }
 
-            if (hasLeft && (leftVisible || side.targetValue == Side.LEFT)) {
+            // The panels stay composed all the time, as Trebuchet keeps its apps view in the hierarchy and only moves it
+            // (AllAppsTransitionController.setProgress sets getAppsViewProgressTranslationY to progress * shiftRange, and its MultiValueAlpha with
+            // setUpdateVisibility hides the view at alpha 0,
+            // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/AllAppsTransitionController.java),
+            // so a swipe never composes a panel. Closed, a panel sits fully off the screen (its travel is its size, so no touch reaches it),
+            // draws nothing (alpha 0 from the shade's content alpha) and is hidden from accessibility services.
+            if (hasLeft) {
                 SidePanel(
                     layout.left, Panel.LEFT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom, half,
                     progress = leftProgress, travelX = { -sideTravel + side.offsetOrZero() },
-                    close = remember(side, minFling) { side.closeWithScroll(Side.LEFT, minFling, spring) }
+                    close = remember(side, minFling) { side.closeWithScroll(Side.LEFT, minFling, spring) },
+                    open = leftVisible || side.targetValue == Side.LEFT
                 )
             }
-            if (hasRight && (rightVisible || side.targetValue == Side.RIGHT)) {
+            if (hasRight) {
                 SidePanel(
                     layout.right, Panel.RIGHT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom, half,
                     progress = rightProgress, travelX = { sideTravel + side.offsetOrZero() },
-                    close = remember(side, minFling) { side.closeWithScroll(Side.RIGHT, minFling, spring) }
+                    close = remember(side, minFling) { side.closeWithScroll(Side.RIGHT, minFling, spring) },
+                    open = rightVisible || side.targetValue == Side.RIGHT
                 )
             }
+            val bottomOpen = bottomVisible || sheet.targetValue == Sheet.OPEN
             when (layout.bottom) {
-                // Recents stays composed below the screen: its height gives the anchor, so the first opening already knows how far to go.
-                // Closed, it is hidden from accessibility services.
+                // Recents' height gives the anchor, so the first opening already knows how far to go.
                 PanelKind.RECENTS -> RecentsPanel(
                     state,
                     panelActions,
@@ -410,22 +430,21 @@ fun HomeContent(
                         .heightIn(max = half)
                         .onSizeChanged { recentsHeight = it.height }
                         .graphicsLayer { translationY = bottomTravel + sheet.offsetOrZero() }
-                        .then(if (bottomVisible || sheet.targetValue == Sheet.OPEN) Modifier else Modifier.clearAndSetSemantics { })
+                        .then(if (bottomOpen) Modifier else Modifier.clearAndSetSemantics { })
                 )
                 // Apps at the bottom is screen wide and half the screen high, its travel the same.
-                PanelKind.APPS -> if (bottomVisible || sheet.targetValue == Sheet.OPEN) {
-                    AppsPanel(
-                        state, pinned, panelActions, seen, appsGrid,
-                        edge = Panel.BOTTOM,
-                        progress = bottomProgress,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = bottom)
-                            .fillMaxWidth()
-                            .height(half)
-                            .graphicsLayer { translationY = bottomTravel + sheet.offsetOrZero() }
-                    )
-                }
+                PanelKind.APPS -> AppsPanel(
+                    state, pinned, panelActions, seen, appsGrid,
+                    edge = Panel.BOTTOM,
+                    progress = bottomProgress,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = bottom)
+                        .fillMaxWidth()
+                        .height(half)
+                        .graphicsLayer { translationY = bottomTravel + sheet.offsetOrZero() }
+                        .then(if (bottomOpen) Modifier else Modifier.clearAndSetSemantics { })
+                )
                 PanelKind.NONE -> Unit
             }
 
@@ -477,9 +496,12 @@ private fun BoxScope.SidePanel(
     half: Dp,
     progress: () -> Float,
     travelX: () -> Float,
-    close: androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+    close: androidx.compose.ui.input.nestedscroll.NestedScrollConnection,
+    open: Boolean
 ) {
     val left = edge == Panel.LEFT
+    // Closed, the panel stays composed off the screen and is hidden from accessibility services.
+    val semantics = if (open) Modifier else Modifier.clearAndSetSemantics { }
     when (kind) {
         PanelKind.APPS -> AppsPanel(
             state, pinned, actions, seen, grid,
@@ -490,7 +512,8 @@ private fun BoxScope.SidePanel(
                 .padding(top = top, bottom = bottom)
                 .width(width)
                 .fillMaxHeight()
-                .graphicsLayer { translationX = travelX() },
+                .graphicsLayer { translationX = travelX() }
+                .then(semantics),
             close = close
         )
         PanelKind.RECENTS -> RecentsPanel(
@@ -501,6 +524,7 @@ private fun BoxScope.SidePanel(
                 .width(width)
                 .heightIn(max = half)
                 .graphicsLayer { translationX = travelX() }
+                .then(semantics)
         )
         PanelKind.NONE -> Unit
     }

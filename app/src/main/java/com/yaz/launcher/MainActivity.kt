@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -27,6 +28,9 @@ class MainActivity : ComponentActivity() {
     // https://developer.android.com/develop/ui/compose/state).
     private var homeSignal by mutableIntStateOf(0)
 
+    // Whether the screens may animate the last Home press: Trebuchet's alreadyOnHome, false when the system brings the home to the front.
+    private var homeAnimated by mutableStateOf(true)
+
     // Store's MainActivity.onCreate.
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -38,15 +42,21 @@ class MainActivity : ComponentActivity() {
                 else -> Unit
             }
         })
-        setContent { AppSurface { LauncherApp(homeSignal) } }
+        setContent { AppSurface { LauncherApp(homeSignal, homeAnimated) } }
     }
 
     // The Home button or gesture brings an ACTION_MAIN + CATEGORY_HOME intent to the running home (singleTask). Trebuchet's Launcher.onNewIntent
     // does the same on ACTION_MAIN: it closes every open floating view and goes back to the NORMAL state, the bare home
     // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java). Here the count
     // goes up and the screens read it: LauncherApp leaves Settings and the other routes, HomeScreen closes its panel.
+    // Trebuchet's rule in the same method: alreadyOnHome = mHasFocus && (intent.getFlags() & FLAG_ACTIVITY_BROUGHT_TO_FRONT) != FLAG_ACTIVITY_BROUGHT_TO_FRONT;
+    // the state change and the closing views animate only then (goToState(NORMAL, alreadyOnHome)), otherwise they are instant, the system
+    // animating the way home itself. mHasFocus is the window's focus, hasWindowFocus() here.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) homeSignal++
+        if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) {
+            homeAnimated = hasWindowFocus() && (intent.flags and Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT) != Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT
+            homeSignal++
+        }
     }
 }

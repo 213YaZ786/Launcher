@@ -29,6 +29,7 @@ import com.yaz.launcher.feature.home.Fixtures
 import com.yaz.launcher.feature.home.HomeActions
 import com.yaz.launcher.feature.home.HomeContent
 import com.yaz.launcher.feature.home.Panel
+import com.yaz.launcher.feature.hidden.HiddenAppsContent
 import com.yaz.launcher.feature.setup.GuideContent
 import com.yaz.launcher.ui.theme.AppTheme
 import org.junit.Rule
@@ -133,8 +134,15 @@ class LauncherScreenshotTest {
         Wallpaper { HomeContent(Fixtures.noUsage, ThemeMode.SYSTEM, HomeActions(), initial = Panel.BOTTOM) }
     }
 
+    // Two hidden apps, each with its unhide toggle; taken as the tests above are (Store's StoreScreenshotTest,
+    // https://github.com/213YaZ786/Store/blob/main/app/src/test/java/com/yaz/store/StoreScreenshotTest.kt).
     @Test
-    fun guideStart() = capture("guide_start") {
+    fun hiddenApps() = capture("hidden_apps") {
+        HiddenAppsContent(Fixtures.withHidden, onBack = {}, onLaunch = {}, onUnhide = {})
+    }
+
+    @Test
+    fun guideStart()= capture("guide_start") {
         GuideContent(home = false, usage = false)
     }
 

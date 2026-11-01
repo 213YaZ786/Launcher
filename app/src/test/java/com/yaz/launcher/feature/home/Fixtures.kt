@@ -87,6 +87,9 @@ object Fixtures {
     /** Usage access not granted: A to Z, no Recents. */
     val noUsage = LauncherState(loaded = true, usageGranted = false, apps = apps.sortedBy { it.label })
 
+    /** Two hidden apps (Settings, Hidden apps), made as the apps above are (Store's Fixtures, https://github.com/213YaZ786/Store/blob/main/app/src/test/java/com/yaz/store/feature/home/Fixtures.kt). */
+    val withHidden = LauncherState(loaded = true, usageGranted = true, apps = apps.drop(2), hidden = apps.take(2))
+
     /** Usage granted, nothing used yet. */
     val noRecents = LauncherState(loaded = true, usageGranted = true, apps = apps)
 }
