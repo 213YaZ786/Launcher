@@ -51,10 +51,11 @@ internal fun AnchoredDraggableState<*>.offsetOrZero(): Float = offset.let { if (
 internal fun AnchoredDraggableState<Side>.closeWithScroll(
     open: Side,
     minFling: Float,
-    spec: AnimationSpec<Float>
+    spec: AnimationSpec<Float>,
+    gridAtEdge: () -> Boolean
 ): NestedScrollConnection =
     // The panel closes towards its edge: to the right for the right panel (+1), to the left for the left one (-1).
-    closeConnection(open, Side.CLOSED, if (open == Side.RIGHT) 1f else -1f, vertical = false, minFling = minFling, spec = spec)
+    closeConnection(open, Side.CLOSED, if (open == Side.RIGHT) 1f else -1f, vertical = false, minFling = minFling, spec = spec, gridAtEdge = gridAtEdge)
 
 /**
  * Closes the Apps panel open at the bottom with the drag the vertical grid leaves over: the grid at its top cannot go further down, so the
@@ -64,21 +65,32 @@ internal fun AnchoredDraggableState<Side>.closeWithScroll(
  */
 internal fun AnchoredDraggableState<Sheet>.closeWithScrollDown(
     minFling: Float,
-    spec: AnimationSpec<Float>
-): NestedScrollConnection = closeConnection(Sheet.OPEN, Sheet.CLOSED, 1f, vertical = true, minFling = minFling, spec = spec)
+    spec: AnimationSpec<Float>,
+    gridAtEdge: () -> Boolean
+): NestedScrollConnection = closeConnection(Sheet.OPEN, Sheet.CLOSED, 1f, vertical = true, minFling = minFling, spec = spec, gridAtEdge = gridAtEdge)
 
 // The connection of Material 3's ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection (SheetDefaults.kt, vertical and closing downwards there): [vertical] picks the
 // axis, [out] the sign of the way out (+1 down or right, -1 left), [open] and [closed] the two places of the state.
+// Whether the panel may close is decided at the gesture's start, as Trebuchet's AllAppsSwipeController does (canInterceptTouch asks
+// getAppsView().shouldContainerScroll(ev) when the touch goes down, https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/AllAppsSwipeController.java):
+// [gridAtEdge] is read at the first scroll of a gesture (the grid has taken nothing of it yet) and kept until the fling ends. A gesture that began with
+// the grid away from its edge never moves the panel: the grid stops at its edge and the leftover drag and fling are left unconsumed, and the panel
+// closes only with a new gesture that begins at the edge.
 private fun <T> AnchoredDraggableState<T>.closeConnection(
     open: T,
     closed: T,
     out: Float,
     vertical: Boolean,
     minFling: Float,
-    spec: AnimationSpec<Float>
+    spec: AnimationSpec<Float>,
+    gridAtEdge: () -> Boolean
 ): NestedScrollConnection = object : NestedScrollConnection {
 
     private val openAt: Float get() = anchors.positionOf(open)
+
+    // Set at the first user scroll of a gesture, cleared when its fling ends.
+    private var begun = false
+    private var mayClose = false
 
     // The component on the state's axis, as Material 3's Offset.toFloat() and Velocity.toFloat() in
     // ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection (https://github.com/androidx/androidx/blob/androidx-main/compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/SheetDefaults.kt);
@@ -103,13 +115,17 @@ private fun <T> AnchoredDraggableState<T>.closeConnection(
     private fun partlyClosed(): Boolean = (offsetOrZero() - openAt) * out > 0f
 
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+        if (source == NestedScrollSource.UserInput && !begun) {
+            begun = true
+            mayClose = gridAtEdge()
+        }
         val delta = available.along()
         return if (delta * out < 0f && source == NestedScrollSource.UserInput && partlyClosed()) offsetOf(dispatchRawDelta(delta)) else Offset.Zero
     }
 
     override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
         val delta = available.along()
-        return if (delta * out > 0f && source == NestedScrollSource.UserInput) offsetOf(dispatchRawDelta(delta)) else Offset.Zero
+        return if (delta * out > 0f && source == NestedScrollSource.UserInput && mayClose) offsetOf(dispatchRawDelta(delta)) else Offset.Zero
     }
 
     override suspend fun onPreFling(available: Velocity): Velocity {
@@ -123,6 +139,11 @@ private fun <T> AnchoredDraggableState<T>.closeConnection(
     }
 
     override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+        val allowed = mayClose || partlyClosed()
+        // The gesture is over: the next one is judged again at its start.
+        begun = false
+        mayClose = false
+        if (!allowed) return Velocity.Zero
         settleWith(alongVelocity(available))
         return velocityOf(alongVelocity(available))
     }

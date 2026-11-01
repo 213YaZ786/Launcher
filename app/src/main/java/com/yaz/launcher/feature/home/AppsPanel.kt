@@ -116,7 +116,7 @@ fun AppsPanel(
             val iconSize = (columnWidth * 0.6f).coerceIn(44.dp, 72.dp)
             // A slot holds the icon and the label's two lines.
             val rowHeight = CELL_PAD * 2 + iconSize + LABEL_GAP + lineHeight * 2
-            val usable = maxHeight - TOP - lineHeight - SETTINGS_ROW
+            val usable = maxHeight - TOP - lineHeight
             val rows = (usable / rowHeight).toInt().coerceAtLeast(1)
             // The work profile and the private space, each with its apps (an empty one still shows its title and button).
             val profiles = state.profiles.filter { it.kind == ProfileKind.WORK || it.kind == ProfileKind.PRIVATE }
@@ -136,7 +136,6 @@ fun AppsPanel(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     appCells(pinned, state, profiles, blocks, columnWidth, iconSize, actions, seen)
-                    item(key = "settings", span = { GridItemSpan(maxLineSpan) }) { SettingsRow(actions.openSettings) }
                 }
             } else {
                 // At least two rows, so a title and its button fit in a short list. The empty cells that start each block in a new column
@@ -157,7 +156,6 @@ fun AppsPanel(
                     ) {
                         appCells(pinned, state, profiles, blocks, columnWidth, iconSize, actions, seen)
                     }
-                    SettingsRow(actions.openSettings)
                 }
             }
         }
@@ -269,24 +267,6 @@ internal fun <T> profileBlocks(placed: Int, rows: Int, apps: List<List<T>>): Lis
     }
 }
 
-// The row below the grid that opens Settings: its icon and its name, one tap, no zone.
-@Composable
-private fun SettingsRow(onClick: () -> Unit) {
-    val label = stringResource(R.string.apps_settings)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = SETTINGS_ROW)
-            .sinkClickable(label, depth = 0.96f, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-    ) {
-        Icon(AppIcons.Settings, contentDescription = null, modifier = Modifier.size(20.dp))
-        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 12.dp))
-    }
-}
-
 // A pinned activity as a cell: the app's icon and the activity's label, a tap starts it, a long press offers Remove (the panes kit's PillMenu,
 // as the apps' cells; the pinned activity is sdex/ActivityManager's
 // https://github.com/sdex/ActivityManager/blob/main/app/src/main/java/com/sdex/activityrunner/shortcut/ShortcutManager.kt).
@@ -379,6 +359,5 @@ private val TOP = 14.dp
 internal val CELL_PAD = 6.dp
 internal val LABEL_GAP = 4.dp
 
-/** About as wide as a column at the bottom, and the least height of the Settings row (a minimum: it grows with its words). */
+/** About as wide as a column at the bottom. */
 private val BOTTOM_COLUMN = 96.dp
-private val SETTINGS_ROW = 56.dp

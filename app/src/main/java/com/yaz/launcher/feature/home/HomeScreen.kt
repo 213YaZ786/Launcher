@@ -63,6 +63,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.layout.mandatorySystemGestures
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -267,6 +271,12 @@ fun HomeContent(
     val seen = remember { mutableSetOf<String>() }
     // The header's measured height in px: the side panels and the Apps panel at the bottom start under it.
     var headerPx by remember { mutableIntStateOf(0) }
+    // Read when a finger goes down (see onGestureDown below): it went down outside the system's gesture band, and the Apps grids were at the
+    // edge the panel closes towards.
+    var sheetStartOk by remember { mutableStateOf(true) }
+    var sideStartOk by remember { mutableStateOf(true) }
+    var sheetStartAtTop by remember { mutableStateOf(true) }
+    var sideStartAtEdge by remember { mutableStateOf(true) }
     // The apps grid's scroll, kept here: a side Apps panel follows the drag only while the grid is at its start (the right panel's grid runs
     // left to right, the left panel's is mirrored, so both close by a drag towards their edge at their first apps), and it starts again at the
     // start once the panel has closed. The bottom panel has its own vertical grid, closing by a drag down at its top (Trebuchet's
@@ -383,16 +393,24 @@ fun HomeContent(
         val rightVisible by remember { derivedStateOf { side.offsetOrZero() < -0.5f } }
         val bottomVisible by remember { derivedStateOf { sheet.offsetOrZero() < -0.5f } }
         // A side panel with the Apps grid open takes the drag only at the grid's edge on the closing side (the grid takes the swipe elsewhere).
+        // The grid's place is the one it had when the finger went down (sideStartAtEdge, set below), not the live one, as Trebuchet's
+        // AllAppsSwipeController decides at the touch's start: a drag that began in the middle of the grid never closes the panel.
         val sideDrag = when (side.targetValue) {
-            Side.LEFT -> layout.left != PanelKind.APPS || gridAtStart
-            Side.RIGHT -> layout.right != PanelKind.APPS || gridAtStart
+            Side.LEFT -> layout.left != PanelKind.APPS || sideStartAtEdge
+            Side.RIGHT -> layout.right != PanelKind.APPS || sideStartAtEdge
             Side.CLOSED -> true
         }
         // The same for the bottom panel: its vertical grid takes the swipe except at its top.
         val sheetDrag = when (sheet.targetValue) {
-            Sheet.OPEN -> layout.bottom != PanelKind.APPS || bottomGridAtTop
+            Sheet.OPEN -> layout.bottom != PanelKind.APPS || sheetStartAtTop
             Sheet.CLOSED -> true
         }
+        // The bottom edge stays Android's: the home and quick-switch gestures start in the navigation bar and the mandatory system gesture inset,
+        // so a drag that went down there never moves the sheet (the guide's "Conflicts with home or quick-switch gestures",
+        // https://developer.android.com/develop/ui/views/touch-and-input/gestures/gesturenav, which reads the mandatory system gesture insets).
+        val gestureInsets = WindowInsets.mandatorySystemGestures
+        val bottomBand = WindowInsets.mandatorySystemGestures.union(WindowInsets.navigationBars)
+        val direction = LocalLayoutDirection.current
 
         Box(
             Modifier
@@ -428,9 +446,20 @@ fun HomeContent(
                     },
                     onSwipeDown = actions.openNotifications
                 )
+                // What is decided when a finger goes down, before the drags see it (nothing is consumed): whether it went down in the system's
+                // gesture band, and where the Apps grids were.
+                .onGestureDown { position, size ->
+                    val bottomEdge = bottomBand.getBottom(density)
+                    sheetStartOk = position.y < size.height - bottomEdge
+                    val leftEdge = gestureInsets.getLeft(density, direction)
+                    val rightEdge = gestureInsets.getRight(density, direction)
+                    sideStartOk = position.x >= leftEdge && position.x <= size.width - rightEdge
+                    sheetStartAtTop = bottomGridAtTop
+                    sideStartAtEdge = gridAtStart
+                }
                 // A swipe left or right brings in the panel of that edge, a swipe up the bottom one. Only one panel at a time.
-                .anchoredDraggable(side, Orientation.Horizontal, enabled = sheet.targetValue == Sheet.CLOSED && sideDrag)
-                .anchoredDraggable(sheet, Orientation.Vertical, enabled = side.targetValue == Side.CLOSED && sheetDrag)
+                .anchoredDraggable(side, Orientation.Horizontal, enabled = sheet.targetValue == Sheet.CLOSED && sideDrag && sideStartOk)
+                .anchoredDraggable(sheet, Orientation.Vertical, enabled = side.targetValue == Side.CLOSED && sheetDrag && sheetStartOk)
         ) {
             // The scrim, over the wallpaper and under the panels, drawn with the progress read in the draw phase; a tap on it closes the open panel.
             // With no panel open it is the wallpaper itself: a long press opens the Wallpaper and Settings menu (Compose's detectTapGestures,
@@ -480,7 +509,7 @@ fun HomeContent(
                 SidePanel(
                     layout.left, Panel.LEFT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
                     progress = leftProgress, travelX = { -sideTravel + side.offsetOrZero() },
-                    close = remember(side, minFling) { side.closeWithScroll(Side.LEFT, minFling, spring) },
+                    close = remember(side, minFling) { side.closeWithScroll(Side.LEFT, minFling, spring) { gridAtStart } },
                     open = leftVisible || side.targetValue == Side.LEFT
                 )
             }
@@ -488,7 +517,7 @@ fun HomeContent(
                 SidePanel(
                     layout.right, Panel.RIGHT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
                     progress = rightProgress, travelX = { sideTravel + side.offsetOrZero() },
-                    close = remember(side, minFling) { side.closeWithScroll(Side.RIGHT, minFling, spring) },
+                    close = remember(side, minFling) { side.closeWithScroll(Side.RIGHT, minFling, spring) { gridAtStart } },
                     open = rightVisible || side.targetValue == Side.RIGHT
                 )
             }
@@ -513,7 +542,7 @@ fun HomeContent(
                     state, pinned, panelActions, seen, bottomGrid,
                     edge = Panel.BOTTOM,
                     progress = bottomProgress,
-                    close = remember(sheet, minFling) { sheet.closeWithScrollDown(minFling, spring) },
+                    close = remember(sheet, minFling) { sheet.closeWithScrollDown(minFling, spring) { bottomGridAtTop } },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = bottom)

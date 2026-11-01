@@ -30,6 +30,27 @@ fun expandNotificationShade(context: Context): Boolean = runCatching {
 }.isSuccess
 
 /**
+ * Tells where a gesture starts, before anything else sees it: [onDown] gets the first finger's place and the size of the box, on the Initial
+ * pass, and the events are left unconsumed, so the system and the other gestures go on as they were. It lets a gesture be judged at its start (a
+ * panel's drag is kept out of the system's gesture band, the grid's place is read once), the way PillMenu's tracker reads a press
+ * (Compose's pointer event passes, https://developer.android.com/develop/ui/compose/touch-input/pointer-input/understand-gestures#pointer-event-passes).
+ */
+@Composable
+fun Modifier.onGestureDown(onDown: (position: androidx.compose.ui.geometry.Offset, size: androidx.compose.ui.unit.IntSize) -> Unit): Modifier {
+    val latest by rememberUpdatedState(onDown)
+    return pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            latest(down.position, size)
+            // Waits for the end of the gesture so the next first down is a new gesture.
+            do {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+            } while (event.changes.any { it.pressed })
+        }
+    }
+}
+
+/**
  * Calls [onSwipeDown] when a finger lifts after going down more than 48 dp, more down than sideways, as the only finger, with nothing open
  * ([idle] true when the gesture starts and when it ends). The events are read on the Initial pass and left unconsumed. Off when [enabled] is false.
  */
