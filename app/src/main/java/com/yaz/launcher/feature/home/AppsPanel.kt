@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -57,8 +56,9 @@ import com.yaz.launcher.data.apps.AppEntry
 import com.yaz.launcher.data.apps.LauncherState
 import com.yaz.launcher.data.apps.ProfileInfo
 import com.yaz.launcher.data.apps.ProfileKind
-import com.yaz.launcher.ui.component.QuietButton
+import com.yaz.launcher.ui.component.ZoneSurface
 import com.yaz.launcher.ui.icon.PanelIcons
+import com.yaz.launcher.ui.icon.toComposeShape
 import com.yaz.launcher.ui.component.ShadeInterpolation
 import com.yaz.launcher.ui.component.PillItem
 import com.yaz.launcher.ui.component.PillMenu
@@ -79,7 +79,7 @@ private const val COLUMNS = 3
  * it is as wide as the screen and shows as many columns as fit.
  *
  * The head holds the pinned activities as cells (sdex/ActivityManager's pinned shortcut), the end the work profile and the private space,
- * each under its title with its Pause or Lock button, as the Pixel Launcher's and Trebuchet's drawer have them (WorkProfileManager and
+ * each opening with a tile that pauses or locks it, as the Pixel Launcher's and Trebuchet's drawer have their button (WorkProfileManager and
  * PrivateProfileManager, https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/WorkProfileManager.java
  * and PrivateProfileManager.java), and below the grid a Settings row.
  */
@@ -136,12 +136,12 @@ fun AppsPanel(
                     }
                     profiles.forEachIndexed { b, profile ->
                         // A profile starts a new column at its first row: empty cells fill the rest of the column before it, then its
-                        // title and button are one ordinary cell, and its apps follow below in the same column.
+                        // tile is one ordinary cell, drawn like an app, and its apps follow below in the same column.
                         items(blocks[b].padding, key = { "pad/" + profile.serial + "/" + it }) {
                             Spacer(Modifier.width(columnWidth))
                         }
                         item(key = "profile/" + profile.serial) {
-                            ProfileHeader(profile, actions, Modifier.width(columnWidth))
+                            ProfileCell(profile, iconSize, actions, seen, Modifier.width(columnWidth))
                         }
                         val own = blocks[b].apps
                         itemsIndexed(own, key = { _, entry -> entry.listKey() }) { index, entry ->
@@ -155,13 +155,17 @@ fun AppsPanel(
     }
 }
 
-// The title of the work profile or the private space with its button: Pause or Resume the work apps, Lock or Unlock the private space
-// (Trebuchet's WorkProfileManager.setWorkProfileEnabled and PrivateProfileManager.setQuietMode ask Android for quiet mode the same way,
+// The work profile or the private space as one tile of the grid, drawn like an app: the glass pane of an app icon, in the user's shape and
+// size, with a glyph on it, and the name under it. A tap pauses or resumes the work apps, locks or unlocks the private space (Trebuchet's
+// WorkProfileManager.setWorkProfileEnabled and PrivateProfileManager.setQuietMode ask Android for quiet mode the same way,
 // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/UserProfileManager.java).
+// Compared: Trebuchet's private_space_header.xml (a lock pill beside the title) and the Pixel Launcher (the same pill); the tile in the grid is
+// iOS's App Library, where each group is one tile among the others. The cell is AppCell's, the glyph is centred in the pane at 45 % of its size.
 @Composable
-private fun ProfileHeader(profile: ProfileInfo, actions: HomeActions, modifier: Modifier = Modifier) {
+private fun ProfileCell(profile: ProfileInfo, iconSize: Dp, actions: HomeActions, seen: MutableSet<String>, modifier: Modifier = Modifier) {
     val work = profile.kind == ProfileKind.WORK
     val title = stringResource(if (work) R.string.apps_work else R.string.apps_private)
+    // The label says the action a tap does.
     val action = stringResource(
         when {
             work && profile.quiet -> R.string.apps_resume
@@ -170,18 +174,28 @@ private fun ProfileHeader(profile: ProfileInfo, actions: HomeActions, modifier: 
             else -> R.string.apps_lock
         }
     )
-    // One cell of the grid, as wide and as high as an app's: the title then its button, centred. The title is text, without a zone, and
-    // shrinks (Compose's TextAutoSize, down to 9 sp, two lines at most) rather than being cut; the button is the one tap.
-    val style = MaterialTheme.typography.titleMedium
-    Column(modifier.fillMaxHeight(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        BasicText(
-            title,
-            style = style.copy(color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center),
-            maxLines = 2,
-            autoSize = TextAutoSize.StepBased(minFontSize = 9.sp, maxFontSize = style.fontSize, stepSize = 0.5.sp),
-            modifier = Modifier.padding(horizontal = 4.dp)
-        )
-        QuietButton(onClick = { actions.setQuiet(profile, !profile.quiet) }) { Text(action, textAlign = TextAlign.Center) }
+    // The glyph shows the state: the private space locked or open, the work apps paused or running.
+    val glyph = when {
+        work && profile.quiet -> PanelIcons.WorkOff
+        work -> PanelIcons.Work
+        profile.quiet -> PanelIcons.Lock
+        else -> PanelIcons.LockOpen
+    }
+    val shape = LocalIconStyle.current.shape.toComposeShape()
+    Box(modifier.entrancePop(seen, "profile/" + profile.serial, 0)) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxWidth()
+                .sinkClickable(action, onClick = { actions.setQuiet(profile, !profile.quiet) })
+                .padding(horizontal = 2.dp, vertical = CELL_PAD)
+        ) {
+            Box(Modifier.size(iconSize), contentAlignment = Alignment.Center) {
+                ZoneSurface(shape = shape, modifier = Modifier.size(iconSize)) { }
+                Icon(glyph, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(iconSize * 0.45f))
+            }
+            CellLabel(title)
+        }
     }
 }
 

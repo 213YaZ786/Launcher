@@ -37,6 +37,59 @@ object PanelIcons {
         )
     }
 
+    // The private space and the work profile on their tile of the Apps grid. Lock and Unlock: Material Symbols, rounded, filled, 400 weight, Apache License 2.0
+    // (https://github.com/google/material-design-icons, symbols; paths from marella/material-symbols svg/400/rounded/lock-fill.svg and lock_open_right-fill.svg,
+    // https://github.com/marella/material-symbols/blob/main/svg/400/rounded/lock-fill.svg, 960 grid with its y origin at -960).
+
+    /** The private space locked (a tap unlocks it). */
+    val Lock: ImageVector by lazy {
+        buildSymbol(
+            "Lock",
+            "M220-80q-24.75 0-42.37-17.63Q160-115.25 160-140v-434q0-24.75 17.63-42.38Q195.25-634 220-634h70v-96q0-78.85 55.61-134.42Q401.21-920 480.11-920q78.89 0 134.39 55.58Q670-808.85 670-730v96h70q24.75 0 42.38 17.62Q800-598.75 800-574v434q0 24.75-17.62 42.37Q764.75-80 740-80H220Zm314.5-222.03Q557-324.06 557-355q0-30-22.67-54.5t-54.5-24.5q-31.83 0-54.33 24.5t-22.5 55q0 30.5 22.67 52.5t54.5 22q31.83 0 54.33-22.03ZM350-634h260v-96q0-54.17-37.88-92.08-37.88-37.92-92-37.92T388-822.08q-38 37.91-38 92.08v96Z"
+        )
+    }
+
+    /** The private space unlocked (a tap locks it). */
+    val LockOpen: ImageVector by lazy {
+        buildSymbol(
+            "LockOpen",
+            "M534.5-302.03Q557-324.06 557-355q0-30-22.67-54.5t-54.5-24.5q-31.83 0-54.33 24.5t-22.5 55q0 30.5 22.67 52.5t54.5 22q31.83 0 54.33-22.03ZM220-80q-24.75 0-42.37-17.63Q160-115.25 160-140v-434q0-24.75 17.63-42.38Q195.25-634 220-634h330v-96q0-78.85 55.58-134.42Q661.15-920 740-920q73 0 126 47.5T928-755q2 10.16-6.59 17.58-8.6 7.42-21.5 7.42-12.91 0-21.41-6T868-755q-9-45-44.7-75T740-860q-54.17 0-92.08 37.92Q610-784.17 610-730v96h130q24.75 0 42.38 17.62Q800-598.75 800-574v434q0 24.75-17.62 42.37Q764.75-80 740-80H220Z"
+        )
+    }
+
+    // Work and Work off: Material Icons Round (filled, 24dp grid), Apache License 2.0, the same family as the Material Symbols above; Symbols has no
+    // work_off (https://github.com/google/material-design-icons, src/action/work/materialiconsround/24px.svg and src/action/work_off/materialiconsround/24px.svg).
+
+    /** The work profile running (a tap pauses it). */
+    val Work: ImageVector by lazy {
+        build("Work", "M20 6h-4V4c0-1.11-.89-2-2-2h-4c-1.11 0-2 .89-2 2v2H4c-1.11 0-1.99.89-1.99 2L2 19c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-6 0h-4V4h4v2z")
+    }
+
+    /** The work profile paused (a tap resumes it). */
+    val WorkOff: ImageVector by lazy {
+        build(
+            "WorkOff",
+            "M4.11 2.54c-.39-.39-1.02-.39-1.41 0-.39.39-.39 1.02 0 1.41L4.74 6H4c-1.11 0-1.99.89-1.99 2L2 19c0 1.11.89 2 2 2h15.74l1.29 1.29c.39.39 1.02.39 1.41 0 .39-.39.39-1.02 0-1.41L4.11 2.54zM10 4h4v2h-3.6L22 17.6V8c0-1.11-.89-2-2-2h-4V4c0-1.11-.89-2-2-2h-4c-.99 0-1.8.7-1.96 1.64L10 5.6V4z"
+        )
+    }
+
+    // A Material Symbols path (960 grid, y from -960 to 0): the group moves it down into the 0 to 960 viewport.
+    private fun buildSymbol(name: String, pathData: String): ImageVector =
+        ImageVector.Builder(
+            name = name,
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 960f,
+            viewportHeight = 960f
+        ).apply {
+            addGroup(translationY = 960f)
+            addPath(
+                pathData = PathParser().parsePathString(pathData).toNodes(),
+                fill = SolidColor(Color.Black)
+            )
+            clearGroup()
+        }.build()
+
     // Store's AppIcons.build.
     private fun build(name: String, pathData: String): ImageVector =
         ImageVector.Builder(
