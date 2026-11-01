@@ -387,11 +387,23 @@ fun HomeContent(
         val sideWidth = (maxWidth - margin).coerceAtMost(420.dp)
         val sideTravel = with(density) { sideWidth.toPx() }
         val appsHeight = (maxHeight - top - bottom).coerceAtLeast(0.dp)
-        val bottomPanelHeight = with(density) { appsHeight.toPx() }
-        val bottomTravel = with(density) { bottom.toPx() } + bottomPanelHeight
         val leftVisible by remember { derivedStateOf { side.offsetOrZero() > 0.5f } }
         val rightVisible by remember { derivedStateOf { side.offsetOrZero() < -0.5f } }
         val bottomVisible by remember { derivedStateOf { sheet.offsetOrZero() < -0.5f } }
+        // The bottom panel's travel does not change while a panel is out: Trebuchet's AllAppsTransitionController gives its shift range once
+        // (setShiftRange, a constant of the device profile, never a size that moves with the content,
+        // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/AllAppsTransitionController.java).
+        // Here the header grows as a panel comes out (its clock, capsules and alarm appear): Modifier.anchoredDraggable's state, given new anchors
+        // while the finger drags it, cannot snap and keeps a target of the old anchors for good (AnchoredDraggableState.updateAnchors sets
+        // dragTarget, which only an animateTo clears, https://github.com/androidx/androidx/blob/androidx-main/compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/AnchoredDraggable.kt):
+        // isAnimationRunning then stays true, so the next touch starts a drag at once (a tap on an icon is lost, a long press on the wallpaper
+        // never comes) and targetValue says Closed on an open panel. So the header height that sets the travel is the one read while no
+        // bottom panel is out; the panel's own height follows the live header.
+        val sheetOut by remember { derivedStateOf { sheet.offsetOrZero() < -0.5f || sheet.targetValue != Sheet.CLOSED } }
+        val travelHeader = remember { IntArray(1) }
+        if (!sheetOut) travelHeader[0] = headerPx
+        val travelTop = if (travelHeader[0] > 0) with(density) { travelHeader[0].toDp() } else safeTop + margin
+        val bottomTravel = with(density) { (maxHeight - travelTop).toPx() }
         // A side panel with the Apps grid open takes the drag only at the grid's edge on the closing side (the grid takes the swipe elsewhere).
         // The grid's place is the one it had when the finger went down (sideStartAtEdge, set below), not the live one, as Trebuchet's
         // AllAppsSwipeController decides at the touch's start: a drag that began in the middle of the grid never closes the panel.
