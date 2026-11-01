@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ported from Store (YAZ/Store at HEAD, app/src/main/AndroidManifest.xml), itself from Calculator (https://github.com/213YaZ786/Calculator, app/src/main/AndroidManifest.xml).
+     The home activity follows Trebuchet's (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/AndroidManifest.xml):
+     HOME and DEFAULT, singleTask, clearTaskOnLaunch, stateNotNeeded. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- The update check on GitHub when the app opens. Nothing else goes out. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Only used when the user chooses to install updates from the app; Android asks them then. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- An update goes in without a question when the user leaves the app. -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <!-- The note after an update and while one downloads. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Recents: the apps by last use. Granted by the user in Android's "Usage access" screen, or over ADB. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- The private space's apps, listed while it is unlocked (Android 15 and later, a normal permission for the home app). -->
+    <uses-permission android:name="android.permission.ACCESS_HIDDEN_PROFILES" />
+    <!-- Uninstall an app when the user asks (ACTION_DELETE). -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- Store's door (update kit, StoreLink): the app tells Store when it opens and when the user leaves it. -->
+    <uses-permission android:name="com.yaz.store.permission.DOOR" />
+
+    <!-- Package visibility (https://developer.android.com/training/package-visibility) without QUERY_ALL_PACKAGES:
+         every app with a launcher entry, and Store (StoreLink's header). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <package android:name="com.yaz.store" />
+        <!-- The wallpaper picker, found before Wallpaper starts it (AppActions.openWallpaper). -->
+        <intent>
+            <action android:name="android.intent.action.SET_WALLPAPER" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".LauncherApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Launcher"
+        android:enableOnBackInvokedCallback="false"
+        android:usesCleartextTraffic="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:memtagMode="sync">
+
+        <!-- The home screen. HOME and DEFAULT make it a choice for Android's home role; LAUNCHER keeps an icon in the apps panel. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustPan"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:excludeFromRecents="true"
+            android:clearTaskOnLaunch="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- The notification dots: Android binds this listener only while the user gave it notification access, and only the system can bind it
+             (BIND_NOTIFICATION_LISTENER_SERVICE, https://developer.android.com/reference/android/service/notification/NotificationListenerService).
+             Declaration of Trebuchet's NotificationListener service
+             (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/AndroidManifest-common.xml). -->
+        <service
+            android:name=".data.notify.DotListener"
+            android:exported="true"
+            android:label="@string/notification_dots_service_title"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- After an update the app installed itself: a notification to open it again. -->
+        <receiver
+            android:name=".core.update.UpdatedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
