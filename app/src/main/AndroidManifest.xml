@@ -21,6 +21,9 @@
     <uses-permission android:name="android.permission.ACCESS_HIDDEN_PROFILES" />
     <!-- Uninstall an app when the user asks (ACTION_DELETE). -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- A swipe down on the home screen opens the notification shade (a normal permission; Olauncher's Utils.expandNotificationDrawer,
+         https://github.com/tanujnotes/Olauncher/blob/master/app/src/main/java/app/olauncher/helper/Utils.kt). -->
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
     <!-- Store's door (update kit, StoreLink): the app tells Store when it opens and when the user leaves it. -->
     <uses-permission android:name="com.yaz.store.permission.DOOR" />
 

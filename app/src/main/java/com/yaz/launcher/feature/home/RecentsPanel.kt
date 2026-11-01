@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -54,21 +55,20 @@ import com.yaz.launcher.ui.icon.PanelIcons
 private enum class Dismiss { REST, GONE }
 
 /**
- * The panel: the icons laid straight on the scrim, as the Quick Settings shade lays its tiles (no pane), as high as they need, at most
- * [limit]; its alpha is the shade's content alpha of [progress], the panel's own opening 0 to 1 (SystemUI's ShadeInterpolation.getContentAlpha,
- * ui/component/ShadeInterpolation.kt).
+ * The panel: the icons laid straight on the scrim, as the Quick Settings shade lays its tiles (no pane). It is a full page like the Apps
+ * panel, [modifier] giving it the page its edge has (from under the header on), the icons centred in it; its alpha is the shade's content
+ * alpha of [progress], the panel's own opening 0 to 1 (SystemUI's ShadeInterpolation.getContentAlpha, ui/component/ShadeInterpolation.kt).
  */
 @Composable
 fun RecentsPanel(
     state: LauncherState,
     actions: HomeActions,
     seen: MutableSet<String>,
-    limit: Dp,
     modifier: Modifier = Modifier,
     progress: () -> Float = { 1f }
 ) {
     Box(modifier.graphicsLayer { alpha = ShadeInterpolation.getContentAlpha(progress()) }) {
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             when {
                 !state.usageGranted -> EmptyZone(
                     title = stringResource(R.string.recents_usage_title),
@@ -88,8 +88,8 @@ fun RecentsPanel(
                     val columns = ((maxWidth - SIDE * 2) / 84.dp).toInt().coerceIn(3, 6)
                     val iconSize = ((maxWidth - SIDE * 2) / columns * 0.6f).coerceIn(44.dp, 64.dp)
                     val rowHeight = CELL_PAD * 2 + iconSize + LABEL_GAP + lineHeight * 2
-                    // Rows are not scrolled: what does not fit under the half screen shows when a row above leaves.
-                    val rows = ((limit - TOP - BOTTOM) / rowHeight).toInt().coerceAtLeast(1)
+                    // Rows are not scrolled: what does not fit on the page shows when a row above leaves.
+                    val rows = ((maxHeight - TOP - BOTTOM) / rowHeight).toInt().coerceAtLeast(1)
                     val shown = state.recents.take(rows * columns)
                     GridRows(
                         shown,

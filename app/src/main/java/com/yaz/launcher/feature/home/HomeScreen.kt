@@ -57,6 +57,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -74,8 +75,21 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import com.yaz.launcher.data.glance.launchPackage
+import com.yaz.launcher.data.settings.DateMode
+import com.yaz.launcher.data.settings.SwipeDown
+import com.yaz.launcher.ui.component.findActivity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
@@ -165,8 +179,26 @@ fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, onSettings: ()
             hide = { entry -> model.hide(entry.packageName) },
             openActivities = { entry -> onActivities(entry.packageName) },
             launchPinned = { pin -> if (!AppActivities.launch(context, ComponentName(pin.packageName, pin.className))) haptics.reject() },
-            unpin = { pin -> store.update { it.copy(pinned = it.pinned - pin) } }
+            unpin = { pin -> store.update { it.copy(pinned = it.pinned - pin) } },
+            openPackage = { packageName -> if (!launchPackage(context, packageName)) haptics.reject() },
+            openNotifications = { if (!expandNotificationShade(context)) haptics.reject() }
         )
+    }
+    // The status bar is hidden while the home screen is shown and the setting is on (the guide, Settings and the other screens show it:
+    // this leaves the composition with the home route). Android's immersive recipe for the status bar only, the navigation bar stays
+    // (https://developer.android.com/develop/ui/views/layout/immersive): a swipe from the top edge shows it for a moment.
+    val view = LocalView.current
+    val hideBar = settings.hideStatusBar && settings.setupDone
+    DisposableEffect(hideBar, view) {
+        val window = view.context.findActivity()?.window
+        if (window != null && hideBar) {
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+        }
+        onDispose {
+            if (window != null && hideBar) WindowCompat.getInsetsController(window, view).show(WindowInsetsCompat.Type.statusBars())
+        }
     }
     // The pinned activities with their app's icon; one whose app is gone is not shown (it comes back with the app).
     val pinned = remember(state, settings.pinned) {
@@ -179,7 +211,8 @@ fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, onSettings: ()
     val layout = PanelLayout(left = settings.swipeRight, right = settings.swipeLeft, bottom = settings.swipeUp)
     HomeContent(
         state, settings.themeMode, actions, panelOpacity = settings.panelOpacity, iconShape = settings.iconShape, themedIcons = settings.themedIcons,
-        edgeTabs = settings.edgeTabs, marks = AppMarks(dots, updates), pinned = pinned, layout = layout, homeSignal = homeSignal, homeAnimated = homeAnimated
+        edgeTabs = settings.edgeTabs, marks = AppMarks(dots, updates), pinned = pinned, layout = layout, homeSignal = homeSignal, homeAnimated = homeAnimated,
+        swipeDown = settings.swipeDown, dateMode = settings.dateMode
     )
 }
 
@@ -207,7 +240,11 @@ fun HomeContent(
     /** Goes up each time Home is pressed while the app runs: the open panel closes (Trebuchet's Launcher.onNewIntent closes its floating views). */
     homeSignal: Int = 0,
     /** False when the system brought the home to the front: the panels then close at once (Trebuchet's alreadyOnHome). */
-    homeAnimated: Boolean = true
+    homeAnimated: Boolean = true,
+    /** What a swipe down on the wallpaper does. */
+    swipeDown: SwipeDown = SwipeDown.NOTHING,
+    /** The calendar of the header shown over the open panels. */
+    dateMode: DateMode = DateMode.BOTH
 ) {
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
@@ -228,7 +265,8 @@ fun HomeContent(
     }
     val sheet = remember { AnchoredDraggableState(if (initial == Panel.BOTTOM && hasBottom) Sheet.OPEN else Sheet.CLOSED) }
     val seen = remember { mutableSetOf<String>() }
-    var recentsHeight by remember { mutableIntStateOf(0) }
+    // The header's measured height in px: the side panels and the Apps panel at the bottom start under it.
+    var headerPx by remember { mutableIntStateOf(0) }
     // The apps grid's scroll, kept here: a side Apps panel follows the drag only while the grid is at its start (the right panel's grid runs
     // left to right, the left panel's is mirrored, so both close by a drag towards their edge at their first apps), and it starts again at the
     // start once the panel has closed. The bottom panel has its own vertical grid, closing by a drag down at its top (Trebuchet's
@@ -281,7 +319,8 @@ fun HomeContent(
             openStore = { actions.openStore(); close() },
             openActivities = { actions.openActivities(it); close() },
             launchPinned = { actions.launchPinned(it); close() },
-            openSettings = { actions.openSettings(); close() }
+            openSettings = { actions.openSettings(); close() },
+            openPackage = { actions.openPackage(it); close() }
         )
     }
 
@@ -317,6 +356,8 @@ fun HomeContent(
         PillItem(AppIcons.Settings, stringResource(R.string.menu_settings), PillMotion.WIGGLE) { actions.openSettings() }
     )
     val homeOptions = stringResource(R.string.home_options)
+    // The swipe down for the shade, null when off; the edge tabs' windows read it too (they are windows of their own).
+    val shadeSwipe: (() -> Unit)? = if (swipeDown == SwipeDown.NOTIFICATIONS) actions.openNotifications else null
 
     CompositionLocalProvider(
         LocalContentColor provides MaterialTheme.colorScheme.onSurface,
@@ -325,15 +366,18 @@ fun HomeContent(
     ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val margin = 12.dp
-        val top = statusBarTop() + margin
+        // The panels start under the header, which holds the system bars' and the cut-out's room itself; before it is measured, the safe top
+        // (the status bar when shown, else the cut-out) and a margin.
+        val safeTop = WindowInsets.systemBars.union(WindowInsets.displayCutout).asPaddingValues().calculateTopPadding()
+        val top = if (headerPx > 0) with(density) { headerPx.toDp() } else safeTop + margin
         val bottom = navigationBarBottom() + margin
-        val half = maxHeight / 2
         // The side panels start from their screen edge (no margin on that side, the other keeps one on a phone); their travel is their width,
-        // which takes them fully off the screen. The bottom panel keeps its margins; Recents is as high as its icons, Apps half the screen.
+        // which takes them fully off the screen. The bottom panel keeps its bottom margin; Apps and Recents both take the height from under
+        // the header to the navigation bar's margin, as the Pixel Launcher's drawer fills the screen, and the screen's width.
         val sideWidth = (maxWidth - margin).coerceAtMost(420.dp)
-        val recentsWidth = (maxWidth - margin * 2).coerceAtMost(560.dp)
         val sideTravel = with(density) { sideWidth.toPx() }
-        val bottomPanelHeight = if (layout.bottom == PanelKind.RECENTS) recentsHeight.coerceAtLeast(1).toFloat() else with(density) { half.toPx() }
+        val appsHeight = (maxHeight - top - bottom).coerceAtLeast(0.dp)
+        val bottomPanelHeight = with(density) { appsHeight.toPx() }
         val bottomTravel = with(density) { bottom.toPx() } + bottomPanelHeight
         val leftVisible by remember { derivedStateOf { side.offsetOrZero() > 0.5f } }
         val rightVisible by remember { derivedStateOf { side.offsetOrZero() < -0.5f } }
@@ -375,6 +419,15 @@ fun HomeContent(
                     )
                     layout(placeable.width, placeable.height) { placeable.place(0, 0) }
                 }
+                // A swipe down opens the notification shade when no panel is open or opening (it watches the touches and consumes none).
+                .onSwipeDown(
+                    enabled = swipeDown == SwipeDown.NOTIFICATIONS,
+                    idle = {
+                        side.offsetOrZero() == 0f && sheet.offsetOrZero() == 0f &&
+                            side.targetValue == Side.CLOSED && sheet.targetValue == Sheet.CLOSED && !wallpaperMenu.shown
+                    },
+                    onSwipeDown = actions.openNotifications
+                )
                 // A swipe left or right brings in the panel of that edge, a swipe up the bottom one. Only one panel at a time.
                 .anchoredDraggable(side, Orientation.Horizontal, enabled = sheet.targetValue == Sheet.CLOSED && sideDrag)
                 .anchoredDraggable(sheet, Orientation.Vertical, enabled = side.targetValue == Side.CLOSED && sheetDrag)
@@ -401,6 +454,22 @@ fun HomeContent(
                 PillMenu(wallpaperMenu, wallpaperItems)
             }
 
+            // The header, over the scrim and under the panels, in place of the status bar: it shows as far as a panel is open, with the panels'
+            // content alpha, and is hidden from accessibility otherwise (it is always composed so that its height is known; it reads nothing
+            // and answers no tap while no panel is open).
+            val headerShown = leftVisible || rightVisible || bottomVisible || anyOpen
+            PanelHeader(
+                shown = headerShown,
+                dateMode = dateMode,
+                onOpen = panelActions.openPackage,
+                onSettings = panelActions.openSettings,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .onSizeChanged { headerPx = it.height }
+                    .graphicsLayer { alpha = ShadeInterpolation.getContentAlpha(progress()) }
+                    .then(if (headerShown) Modifier else Modifier.clearAndSetSemantics { })
+            )
+
             // The panels stay composed all the time, as Trebuchet keeps its apps view in the hierarchy and only moves it
             // (AllAppsTransitionController.setProgress sets getAppsViewProgressTranslationY to progress * shiftRange, and its MultiValueAlpha with
             // setUpdateVisibility hides the view at alpha 0,
@@ -409,7 +478,7 @@ fun HomeContent(
             // draws nothing (alpha 0 from the shade's content alpha) and is hidden from accessibility services.
             if (hasLeft) {
                 SidePanel(
-                    layout.left, Panel.LEFT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom, half,
+                    layout.left, Panel.LEFT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
                     progress = leftProgress, travelX = { -sideTravel + side.offsetOrZero() },
                     close = remember(side, minFling) { side.closeWithScroll(Side.LEFT, minFling, spring) },
                     open = leftVisible || side.targetValue == Side.LEFT
@@ -417,7 +486,7 @@ fun HomeContent(
             }
             if (hasRight) {
                 SidePanel(
-                    layout.right, Panel.RIGHT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom, half,
+                    layout.right, Panel.RIGHT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
                     progress = rightProgress, travelX = { sideTravel + side.offsetOrZero() },
                     close = remember(side, minFling) { side.closeWithScroll(Side.RIGHT, minFling, spring) },
                     open = rightVisible || side.targetValue == Side.RIGHT
@@ -425,23 +494,21 @@ fun HomeContent(
             }
             val bottomOpen = bottomVisible || sheet.targetValue == Sheet.OPEN
             when (layout.bottom) {
-                // Recents' height gives the anchor, so the first opening already knows how far to go.
+                // Recents at the bottom is a full page too, the same size and travel as Apps.
                 PanelKind.RECENTS -> RecentsPanel(
                     state,
                     panelActions,
                     seen,
-                    half,
                     progress = bottomProgress,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = bottom)
-                        .width(recentsWidth)
-                        .heightIn(max = half)
-                        .onSizeChanged { recentsHeight = it.height }
+                        .fillMaxWidth()
+                        .height(appsHeight)
                         .graphicsLayer { translationY = bottomTravel + sheet.offsetOrZero() }
                         .then(if (bottomOpen) Modifier else Modifier.clearAndSetSemantics { })
                 )
-                // Apps at the bottom is screen wide and half the screen high, its travel the same.
+                // Apps at the bottom is screen wide and as high as the screen under the header, its travel the same.
                 PanelKind.APPS -> AppsPanel(
                     state, pinned, panelActions, seen, bottomGrid,
                     edge = Panel.BOTTOM,
@@ -451,7 +518,7 @@ fun HomeContent(
                         .align(Alignment.BottomCenter)
                         .padding(bottom = bottom)
                         .fillMaxWidth()
-                        .height(half)
+                        .height(appsHeight)
                         .graphicsLayer { translationY = bottomTravel + sheet.offsetOrZero() }
                         .then(if (bottomOpen) Modifier else Modifier.clearAndSetSemantics { })
                 )
@@ -466,7 +533,7 @@ fun HomeContent(
                     exit = fadeOut() + scaleOut(targetScale = 0.8f),
                     modifier = Modifier.align(Alignment.CenterStart)
                 ) {
-                    EdgeEntry(panelName(layout.left), start = true, visibility = edgeTabs, windowShown = !anyOpen) {
+                    EdgeEntry(panelName(layout.left), start = true, visibility = edgeTabs, windowShown = !anyOpen, onSwipeDown = shadeSwipe) {
                         scope.launch { side.animateTo(Side.LEFT, spring) }
                     }
                 }
@@ -478,7 +545,7 @@ fun HomeContent(
                     exit = fadeOut() + scaleOut(targetScale = 0.8f),
                     modifier = Modifier.align(Alignment.CenterEnd)
                 ) {
-                    EdgeEntry(panelName(layout.right), start = false, visibility = edgeTabs, windowShown = !anyOpen) {
+                    EdgeEntry(panelName(layout.right), start = false, visibility = edgeTabs, windowShown = !anyOpen, onSwipeDown = shadeSwipe) {
                         scope.launch { side.animateTo(Side.RIGHT, spring) }
                     }
                 }
@@ -503,7 +570,6 @@ private fun BoxScope.SidePanel(
     width: Dp,
     top: Dp,
     bottom: Dp,
-    half: Dp,
     progress: () -> Float,
     travelX: () -> Float,
     close: androidx.compose.ui.input.nestedscroll.NestedScrollConnection,
@@ -527,12 +593,13 @@ private fun BoxScope.SidePanel(
             close = close
         )
         PanelKind.RECENTS -> RecentsPanel(
-            state, actions, seen, half,
+            state, actions, seen,
             progress = progress,
             modifier = Modifier
-                .align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
+                .align(if (left) Alignment.TopStart else Alignment.TopEnd)
+                .padding(top = top, bottom = bottom)
                 .width(width)
-                .heightIn(max = half)
+                .fillMaxHeight()
                 .graphicsLayer { translationX = travelX() }
                 .then(semantics)
         )
@@ -559,7 +626,7 @@ private fun fractionOf(offset: Float, end: Float): Float = if (end.isNaN() || en
 // with the entry's description, so TalkBack finds it. The tab itself, 12 dp by 64 dp, is a window of its own that blurs the wallpaper
 // (ui/component/EdgeTabWindow.kt's EdgeTab, like Samsung Edge panels' handle), shown while no panel is open ([windowShown]).
 @Composable
-private fun EdgeEntry(label: String, start: Boolean, visibility: Int, windowShown: Boolean, onClick: () -> Unit) {
+private fun EdgeEntry(label: String, start: Boolean, visibility: Int, windowShown: Boolean, onSwipeDown: (() -> Unit)?, onClick: () -> Unit) {
     Box(
         Modifier
             .size(width = 48.dp, height = 96.dp)
@@ -567,6 +634,6 @@ private fun EdgeEntry(label: String, start: Boolean, visibility: Int, windowShow
             .semantics(mergeDescendants = true) { contentDescription = label },
         contentAlignment = if (start) Alignment.CenterStart else Alignment.CenterEnd
     ) {
-        EdgeTab(start, visibility, label, windowShown, onClick)
+        EdgeTab(start, visibility, label, windowShown, onClick, onSwipeDown)
     }
 }

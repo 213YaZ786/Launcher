@@ -26,12 +26,23 @@ object NotificationDots {
     /** The apps with a dot now. Empty while the listener is not bound (access not granted, or dots turned off in Android's settings). */
     val keys: StateFlow<Set<DotKey>> = _keys.asStateFlow()
 
+    private val _counts = MutableStateFlow<Map<String, Int>>(emptyMap())
+
+    /**
+     * How many notifications each app of the owner has now, by package: each active notification that deserves a dot counts its
+     * Notification.number, or 1 when that is 0 (Trebuchet's NotificationKeyData.count, summed by DotInfo.getNotificationCount,
+     * https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/dot/DotInfo.java).
+     * Only numbers are kept. Empty while the listener is not bound; the panel header's missed calls and unread messages read it.
+     */
+    val counts: StateFlow<Map<String, Int>> = _counts.asStateFlow()
+
     /** NotificationListener.sIsConnected. */
     @Volatile
     internal var connected = false
 
-    internal fun publish(dots: Set<DotKey>) {
+    internal fun publish(dots: Set<DotKey>, counts: Map<String, Int> = emptyMap()) {
         _keys.value = dots
+        _counts.value = counts
     }
 
     /** The listener, as the manifest declares it. */

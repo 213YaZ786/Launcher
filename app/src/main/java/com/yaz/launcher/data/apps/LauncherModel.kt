@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** The most apps Recents lists: Taskbar's max_num_of_recents default (U.java, PREF_MAX_NUM_OF_RECENTS, "10"). */
+const val MAX_RECENTS = 10
+
 /**
  * The apps of a locked private space are not listed, only its header is shown. After PrivateProfileManager: in STATE_DISABLED (the space is
  * locked, `isQuietModeEnabled`) the private apps are not added to the list and only the header with its lock button stays, and
@@ -155,7 +158,9 @@ class LauncherModel(
         val ranked = AppRanking.rank(main, Usage.foregroundByPackage(use.rows))
         val byPackage = ranked.groupBy { it.packageName }
         val recents = if (use.granted) {
-            Recents.build(use.rows, byPackage.keys, app.packageName, gone).mapNotNull { byPackage[it]?.first() }
+            // At most 10, as Taskbar's recents default (its max_num_of_recents preference, read with the default "10" in
+            // https://github.com/farmerbb/Taskbar/blob/master/app/src/main/java/com/farmerbb/taskbar/util/U.java), after the filtering.
+            Recents.build(use.rows, byPackage.keys, app.packageName, gone).mapNotNull { byPackage[it]?.first() }.take(MAX_RECENTS)
         } else {
             emptyList()
         }

@@ -104,7 +104,7 @@ private fun blurRadiusOfRatio(ratio: Float, full: Float): Int {
     return (MIN_BLUR_PX + (full - MIN_BLUR_PX) * ratio).roundToInt().coerceAtMost(MAX_BLUR_PX)
 }
 
-private tailrec fun Context.findActivity(): Activity? = when (this) {
+internal tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null

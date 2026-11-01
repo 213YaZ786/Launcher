@@ -59,8 +59,10 @@ import com.yaz.launcher.BuildConfig
 import com.yaz.launcher.R
 import com.yaz.launcher.core.update.UpdateMode
 import com.yaz.launcher.core.update.Updates
+import com.yaz.launcher.data.settings.DateMode
 import com.yaz.launcher.data.settings.IconShape
 import com.yaz.launcher.data.settings.PanelKind
+import com.yaz.launcher.data.settings.SwipeDown
 import com.yaz.launcher.data.settings.Settings
 import com.yaz.launcher.data.settings.SettingsStore
 import com.yaz.launcher.data.settings.Swipe
@@ -95,7 +97,7 @@ import com.yaz.launcher.ui.icon.toComposeShape
 import kotlin.math.roundToInt
 import org.koin.compose.koinInject
 
-private enum class OpenDialog { NONE, THEME, SHAPE, OPACITY, EDGE_TABS, SWIPE_LEFT, SWIPE_RIGHT, SWIPE_UP, UPDATES }
+private enum class OpenDialog { NONE, THEME, SHAPE, OPACITY, EDGE_TABS, SWIPE_LEFT, SWIPE_RIGHT, SWIPE_UP, SWIPE_DOWN, DATE, UPDATES }
 
 /** The groups of settings: folded one under another on a phone, a list and the open one's page on a wide window. */
 private const val APPEARANCE = "appearance"
@@ -115,6 +117,9 @@ fun SettingsScreen(onBack: () -> Unit, onGuide: () -> Unit, onHidden: () -> Unit
         onPanelOpacity = { percent -> store.update { it.copy(panelOpacity = percent.coerceIn(0, 100)) } },
         onEdgeTabs = { percent -> store.update { it.copy(edgeTabs = percent.coerceIn(0, 100)) } },
         onPanel = { swipe, kind -> store.update { it.withPanel(swipe, kind) } },
+        onSwipeDown = { action -> store.update { it.copy(swipeDown = action) } },
+        onHideStatusBar = { on -> store.update { it.copy(hideStatusBar = on) } },
+        onDateMode = { mode -> store.update { it.copy(dateMode = mode) } },
         onUpdates = { mode -> store.update { it.copy(updates = mode) } },
         onHidden = onHidden,
         onGuide = onGuide
@@ -135,6 +140,9 @@ fun SettingsContent(
     onPanelOpacity: (Int) -> Unit = {},
     onEdgeTabs: (Int) -> Unit = {},
     onPanel: (Swipe, PanelKind) -> Unit = { _, _ -> },
+    onSwipeDown: (SwipeDown) -> Unit = {},
+    onHideStatusBar: (Boolean) -> Unit = {},
+    onDateMode: (DateMode) -> Unit = {},
     onUpdates: (UpdateMode) -> Unit = {},
     onHidden: () -> Unit = {},
     onGuide: () -> Unit = {}
@@ -164,6 +172,9 @@ fun SettingsContent(
     val swipeLeft = stringResource(R.string.settings_swipe_left)
     val swipeRight = stringResource(R.string.settings_swipe_right)
     val swipeUp = stringResource(R.string.settings_swipe_up)
+    val swipeDown = stringResource(R.string.settings_swipe_down)
+    val hideBar = stringResource(R.string.settings_hide_status_bar)
+    val date = stringResource(R.string.settings_date)
     val hidden = stringResource(R.string.settings_hidden)
     val guide = stringResource(R.string.settings_guide)
     val updates = stringResource(R.string.settings_updates)
@@ -204,6 +215,17 @@ fun SettingsContent(
                 id = "tabs", name = tabs, title = tabs, icon = AppIcons.AutoAwesome,
                 value = tabsValue, summary = stringResource(R.string.settings_edge_tabs_summary),
                 onClick = { dialog = OpenDialog.EDGE_TABS }
+            ),
+            // The status bar is replaced by the panels' header on the home screen.
+            SettingsSwitchTile(
+                id = "hide_status_bar", name = hideBar, title = hideBar, icon = AppIcons.Info,
+                summary = stringResource(R.string.settings_hide_status_bar_summary),
+                checked = settings.hideStatusBar, onChange = onHideStatusBar
+            ),
+            SettingsActionTile(
+                id = "date", name = date, title = date, icon = AppIcons.Alarm,
+                value = dateLabel(settings.dateMode), summary = stringResource(R.string.settings_date_summary),
+                onClick = { dialog = OpenDialog.DATE }
             )
         ),
         // One tile per swipe with its panel, as Kvaesitso's gesture rows show their action; the pick goes through Settings.withPanel.
@@ -222,6 +244,11 @@ fun SettingsContent(
                 id = "swipe_up", name = swipeUp, title = swipeUp, icon = AppIcons.Apps,
                 value = panelLabel(settings.panelOf(Swipe.UP)), summary = stringResource(R.string.settings_swipe_up_summary),
                 onClick = { dialog = OpenDialog.SWIPE_UP }
+            ),
+            SettingsActionTile(
+                id = "swipe_down", name = swipeDown, title = swipeDown, icon = AppIcons.Notifications,
+                value = swipeDownLabel(settings.swipeDown), summary = stringResource(R.string.settings_swipe_down_summary),
+                onClick = { dialog = OpenDialog.SWIPE_DOWN }
             ),
             // The Hidden apps screen (Trebuchet's trust apps list), opened from this section.
             SettingsActionTile(
@@ -322,6 +349,20 @@ fun SettingsContent(
         OpenDialog.SWIPE_LEFT -> PanelDialog(swipeLeft, settings.panelOf(Swipe.LEFT), { onPanel(Swipe.LEFT, it) }, close)
         OpenDialog.SWIPE_RIGHT -> PanelDialog(swipeRight, settings.panelOf(Swipe.RIGHT), { onPanel(Swipe.RIGHT, it) }, close)
         OpenDialog.SWIPE_UP -> PanelDialog(swipeUp, settings.panelOf(Swipe.UP), { onPanel(Swipe.UP, it) }, close)
+        OpenDialog.SWIPE_DOWN -> ChoiceDialog(
+            title = swipeDown,
+            options = SwipeDown.entries.map { it to swipeDownLabel(it) },
+            selected = settings.swipeDown,
+            onPick = onSwipeDown,
+            onDismiss = close
+        )
+        OpenDialog.DATE -> ChoiceDialog(
+            title = date,
+            options = DateMode.entries.map { it to dateLabel(it) },
+            selected = settings.dateMode,
+            onPick = onDateMode,
+            onDismiss = close
+        )
         // SMS's UPDATES dialog (https://github.com/213YaZ786/SMS/blob/main/app/src/main/java/com/yaz/sms/feature/settings/SettingsScreen.kt):
         // the choice is kept, and installing asks Android's leave when chosen.
         OpenDialog.UPDATES -> ChoiceDialog(
@@ -369,6 +410,26 @@ private fun panelLabel(kind: PanelKind): String = stringResource(
         PanelKind.APPS -> R.string.settings_panel_apps
         PanelKind.RECENTS -> R.string.settings_panel_recents
         PanelKind.NONE -> R.string.settings_panel_none
+    }
+)
+
+// Store's themeLabel, for the two new choices: a string resource per value
+// (https://github.com/213YaZ786/Store/blob/main/app/src/main/java/com/yaz/store/feature/settings/SettingsScreen.kt).
+@Composable
+private fun swipeDownLabel(action: SwipeDown): String = stringResource(
+    when (action) {
+        SwipeDown.NOTIFICATIONS -> R.string.settings_swipe_down_notifications
+        SwipeDown.NOTHING -> R.string.settings_panel_none
+    }
+)
+
+// Store's themeLabel again (same file), for the date.
+@Composable
+private fun dateLabel(mode: DateMode): String = stringResource(
+    when (mode) {
+        DateMode.HIJRI -> R.string.settings_date_hijri
+        DateMode.GREGORIAN -> R.string.settings_date_gregorian
+        DateMode.BOTH -> R.string.settings_date_both
     }
 )
 

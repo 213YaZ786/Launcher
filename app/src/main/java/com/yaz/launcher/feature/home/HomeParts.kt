@@ -133,7 +133,11 @@ data class HomeActions(
     /** Starts a pinned activity of the Apps panel's head. */
     val launchPinned: (PinnedActivity) -> Unit = {},
     /** Takes a pinned activity out of the Apps panel. */
-    val unpin: (PinnedActivity) -> Unit = {}
+    val unpin: (PinnedActivity) -> Unit = {},
+    /** Starts the launch activity of a package (the header's missed calls and unread messages). */
+    val openPackage: (String) -> Unit = {},
+    /** Opens the notification shade (a swipe down on the home screen). */
+    val openNotifications: () -> Unit = {}
 )
 
 // A pinned activity with the app it belongs to, whose icon its cell shows: ActivityManager's shortcut is the activity's own

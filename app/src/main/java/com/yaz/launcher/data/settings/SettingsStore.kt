@@ -41,6 +41,17 @@ data class PinnedActivity(val packageName: String, val className: String, val us
 @Serializable
 enum class PanelKind { APPS, RECENTS, NONE }
 
+/**
+ * What a swipe down on the home screen does: opens the notification shade (the Pixel Launcher's gesture; Olauncher's swipe down does the same,
+ * https://github.com/tanujnotes/Olauncher/blob/master/app/src/main/java/app/olauncher/helper/Utils.kt, expandNotificationDrawer) or nothing.
+ */
+@Serializable
+enum class SwipeDown { NOTIFICATIONS, NOTHING }
+
+/** Which calendar the header shows: Hijri, Gregorian or both (the Gregorian line first). */
+@Serializable
+enum class DateMode { HIJRI, GREGORIAN, BOTH }
+
 /** The three swipes that open a panel: it comes in from the edge the swipe starts at (a swipe left brings it in from the right). */
 enum class Swipe { LEFT, RIGHT, UP }
 
@@ -74,7 +85,13 @@ data class Settings(
     /** What a swipe left, a swipe right and a swipe up open. */
     val swipeLeft: PanelKind = PanelKind.APPS,
     val swipeRight: PanelKind = PanelKind.NONE,
-    val swipeUp: PanelKind = PanelKind.RECENTS
+    val swipeUp: PanelKind = PanelKind.RECENTS,
+    /** What a swipe down on the home screen does. */
+    val swipeDown: SwipeDown = SwipeDown.NOTIFICATIONS,
+    /** The status bar hidden on the home screen: the panels' header replaces it (the Settings and the guide screens show it again). */
+    val hideStatusBar: Boolean = true,
+    /** The date in the panels' header. */
+    val dateMode: DateMode = DateMode.BOTH
 ) {
     // One action per gesture, read by gesture: Kvaesitso's GestureSettings (swipeLeft, swipeRight, swipeUp, each its own action)
     // https://github.com/MM2-0/Kvaesitso/blob/main/core/preferences/src/main/java/de/mm20/launcher2/preferences/ui/GestureSettings.kt

@@ -6,11 +6,14 @@ package com.yaz.launcher.feature.home
 //   Difference: a thin ring of the surface colour instead of the soft shadow, so it reads on any icon. No count.
 // - The update mark: a small badge at the bottom start (the profile's badge is at the bottom end), red as Store's warning on its updates
 //   (YAZ/Store at HEAD, feature/home/HomeUpdates.kt, colorScheme.error).
-import androidx.compose.foundation.background
+import android.graphics.Color as NativeColor
+import android.graphics.Paint as NativePaint
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -107,18 +110,43 @@ internal fun dotPosition(path: Path, size: Float, direction: Float): Offset {
 }
 
 /**
- * The mark of an update waiting in Store: Material's arrow_circle_up in the error colour on a disc of the surface colour (the icon's ring is
- * transparent inside), 36 % of the icon, at the bottom start. Its description is read with the cell's.
+ * The mark of an update waiting in Store, at the bottom start, 36 % of the icon: Material 3's Badge look (androidx's Badge.kt,
+ * containerColor = error, contentColor = onError, https://github.com/androidx/androidx/blob/androidx-main/compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Badge.kt),
+ * a full disc in the error colour with Material Symbols' arrow_upward in onError at 70 % of the disc, over the soft shadow of Launcher3's
+ * DotRenderer (the key shadow and the ambient one of ShadowGenerator.Builder.drawShadow: blur a 24th of the disc, key offset a 16th, alphas 7 and 88,
+ * https://github.com/LineageOS/android_frameworks_libs_systemui/blob/lineage-22.2/iconloaderlib/src/com/android/launcher3/icons/DotRenderer.java and
+ * ShadowGenerator.java). The disc is 5/6 of the box so the shadow stays inside it. Its description is read with the cell's.
  */
 @Composable
 fun UpdateMark(size: Dp, modifier: Modifier = Modifier) {
-    Box(modifier.size(size), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(size * (5f / 6f)).background(MaterialTheme.colorScheme.surface, CircleShape))
+    val disc = MaterialTheme.colorScheme.error
+    val arrow = MaterialTheme.colorScheme.onError
+    val paint = remember { NativePaint(NativePaint.ANTI_ALIAS_FLAG or NativePaint.FILTER_BITMAP_FLAG) }
+    Box(
+        modifier
+            .size(size)
+            .drawBehind {
+                val diameter = this.size.minDimension * (5f / 6f)
+                val blur = diameter / 24f
+                val key = diameter / 16f
+                drawIntoCanvas { canvas ->
+                    paint.color = disc.toArgb()
+                    // Builder.drawShadow: the key shadow (below the disc), then the ambient one (all round), then the disc.
+                    paint.setShadowLayer(blur, 0f, key, NativeColor.argb(7, 0, 0, 0))
+                    canvas.nativeCanvas.drawCircle(center.x, center.y, diameter / 2f, paint)
+                    paint.setShadowLayer(blur, 0f, 0f, NativeColor.argb(88, 0, 0, 0))
+                    canvas.nativeCanvas.drawCircle(center.x, center.y, diameter / 2f, paint)
+                    paint.clearShadowLayer()
+                    canvas.nativeCanvas.drawCircle(center.x, center.y, diameter / 2f, paint)
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
         Icon(
-            AppIcons.ArrowCircleUp,
+            AppIcons.ArrowUpward,
             contentDescription = stringResource(R.string.update_waiting),
-            tint = MaterialTheme.colorScheme.error,
-            modifier = Modifier.fillMaxSize()
+            tint = arrow,
+            modifier = Modifier.size(size * (5f / 6f) * 0.7f)
         )
     }
 }

@@ -11,6 +11,7 @@ package com.yaz.launcher.feature.home
 // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/lineage/trust/HiddenAppsFilter.java) and Uninstall.
 import android.content.pm.ShortcutInfo
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -221,7 +222,13 @@ private fun ProfileCell(profile: ProfileInfo, iconSize: Dp, actions: HomeActions
         profile.quiet -> PanelIcons.Lock
         else -> PanelIcons.LockOpen
     }
-    val shape = LocalIconStyle.current.shape.toComposeShape()
+    val style = LocalIconStyle.current
+    val shape = style.shape.toComposeShape()
+    // Themed icons on: the tile is drawn as a themed icon, the shape filled with primaryContainer and the glyph in onPrimaryContainer, the
+    // ground and the tint AppIcon passes to renderThemedIcon (Launcher3's ThemedIconDrawable, themed_icon_background_color and themed_icon_color,
+    // https://github.com/LineageOS/android_frameworks_libs_systemui/blob/lineage-22.2/iconloaderlib/src/com/android/launcher3/icons/mono/ThemedIconDrawable.kt).
+    val ground = if (style.themed) MaterialTheme.colorScheme.primaryContainer else null
+    val glyphTint = if (style.themed) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
     Box(modifier.entrancePop(seen, "profile/" + profile.serial, 0)) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -231,8 +238,12 @@ private fun ProfileCell(profile: ProfileInfo, iconSize: Dp, actions: HomeActions
                 .padding(horizontal = 2.dp, vertical = CELL_PAD)
         ) {
             Box(Modifier.size(iconSize), contentAlignment = Alignment.Center) {
-                ZoneSurface(shape = shape, modifier = Modifier.size(iconSize)) { }
-                Icon(glyph, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(iconSize * 0.45f))
+                if (ground != null) {
+                    Box(Modifier.size(iconSize).background(ground, shape))
+                } else {
+                    ZoneSurface(shape = shape, modifier = Modifier.size(iconSize)) { }
+                }
+                Icon(glyph, contentDescription = null, tint = glyphTint, modifier = Modifier.size(iconSize * 0.45f))
             }
             CellLabel(title)
         }

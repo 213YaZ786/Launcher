@@ -10,6 +10,7 @@ package com.yaz.launcher.ui.component
 // - The cross-window blur state is the app's own, rememberCrossWindowBlur (ZoneDialog.kt, AOSP's addCrossWindowBlurEnabledListener recipe).
 // - The window being a tab of the screen edge, like Samsung Edge panels' handle (https://developer.samsung.com/one-ui), only blurred: the user's
 //   wish is a patch of the wallpaper made soft, no fill and no rim.
+import com.yaz.launcher.feature.home.onSwipeDown
 import android.graphics.Color as PlatformColor
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -55,7 +56,7 @@ private const val FALLBACK_ALPHA_AT_DEFAULT = 0.04f
  * very faint white fill instead.
  */
 @Composable
-fun EdgeTab(start: Boolean, strength: Int, label: String, shown: Boolean, onClick: () -> Unit) {
+fun EdgeTab(start: Boolean, strength: Int, label: String, shown: Boolean, onClick: () -> Unit, onSwipeDown: (() -> Unit)? = null) {
     val value = strength.coerceIn(0, 100)
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     if (!shown || value == 0 || !lifecycle.isAtLeast(Lifecycle.State.STARTED)) return
@@ -66,7 +67,15 @@ fun EdgeTab(start: Boolean, strength: Int, label: String, shown: Boolean, onClic
     ) {
         TabWindowSetup(start, value, blur)
         // The tap target of the window; the 48 dp one around it in the activity carries the description for TalkBack, so this one stays silent.
-        Box(Modifier.size(TAB_WIDTH, TAB_HEIGHT).clearAndSetSemantics { }.sinkClickable(label, onClick = onClick))
+        // The tab is a window of its own, so a swipe down that starts on it never reaches the activity's gesture: it reads the same swipe
+        // here (SwipeDown.kt, Initial pass, nothing consumed); the tab is shown only while no panel is open, so the screen is idle.
+        Box(
+            Modifier
+                .size(TAB_WIDTH, TAB_HEIGHT)
+                .clearAndSetSemantics { }
+                .onSwipeDown(enabled = onSwipeDown != null, idle = { true }, onSwipeDown = { onSwipeDown?.invoke() })
+                .sinkClickable(label, onClick = onClick)
+        )
     }
 }
 

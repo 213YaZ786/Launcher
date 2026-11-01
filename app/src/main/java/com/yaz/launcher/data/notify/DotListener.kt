@@ -12,6 +12,7 @@ import android.database.ContentObserver
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.os.Process
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -40,14 +41,16 @@ class DotListener : NotificationListenerService() {
     // The worker's work: the full refresh (MSG_NOTIFICATION_FULL_REFRESH).
     private fun handleWorkerMessage(what: Int): Boolean {
         if (what != MSG_REFRESH) return false
-        val dots = if (NotificationDots.connected) {
-            runCatching {
-                (getActiveNotifications() ?: emptyArray()).filter(::validForDot).map { DotKey(it.packageName, it.user) }.toSet()
-            }.getOrDefault(emptySet())
+        val valid = if (NotificationDots.connected) {
+            runCatching { (getActiveNotifications() ?: emptyArray()).filter(::validForDot) }.getOrDefault(emptyList())
         } else {
-            emptySet()
+            emptyList()
         }
-        NotificationDots.publish(dots)
+        // The count of a package: its owner's notifications, each Notification.number or 1 (NotificationKeyData's count, DotInfo's total).
+        val mine = Process.myUserHandle()
+        val counts = valid.filter { it.user == mine }.groupBy { it.packageName }
+            .mapValues { (_, list) -> list.sumOf { (it.notification?.number ?: 0).coerceAtLeast(1) } }
+        NotificationDots.publish(valid.map { DotKey(it.packageName, it.user) }.toSet(), counts)
         return true
     }
 

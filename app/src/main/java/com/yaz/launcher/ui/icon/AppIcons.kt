@@ -79,6 +79,85 @@ object AppIcons {
     /** The guide, shown again. */
     val AutoAwesome: ImageVector by lazy { build("AutoAwesome", "M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z") }
 
+    // The icons of the update mark and the panel header: Material Symbols, Rounded, filled, weight 400 (Apache-2.0,
+    // https://github.com/google/material-design-icons/tree/master/symbols/android, as the @material-symbols/svg-400 package ships them),
+    // drawn on the symbols' own 960 grid (viewBox "0 -960 960 960").
+
+    /** The arrow of the update mark. Material Symbols arrow_upward. */
+    val ArrowUpward: ImageVector by lazy {
+        symbol("ArrowUpward", "M450-686 223-459q-9 9-21 9t-21-9q-9-9-9-21t9-21l278-278q5-5 10-7t11-2q6 0 11 2t10 7l278 278q9 9 9 21t-9 21q-9 9-21 9t-21-9L510-686v496q0 13-8.5 21.5T480-160q-13 0-21.5-8.5T450-190v-496Z")
+    }
+
+    /** The next alarm. Material Symbols alarm. */
+    val Alarm: ImageVector by lazy {
+        symbol(
+            "Alarm",
+            "M512-450v-160q0-13-8.5-21.5T482-640q-13 0-21.5 8.5T452-610v172q0 6 2 11t7 10l118 118q9 9 21 9t21-9q9-9 9-21t-9-21L512-450ZM339.5-110q-65.5-28-114-77t-77-114Q120-366 120-441q0-74 28.5-139.5t77-114.5q48.5-49 114-77T479-800q74 0 139.5 28T733-695q49 49 77 114.5T838-441q0 75-28 140t-77 114q-49 49-114.5 77T479-82q-74 0-139.5-28ZM71-688q-9-9-8.5-21t9.5-21l121-117q9-8 21.5-7.5T235-846q9 9 8.5 21t-9.5 21L113-687q-9 8-21.5 7.5T71-688Zm816 0q-8 8-20.5 8.5T845-687L724-804q-9-8-9.5-20.5T723-846q8-8 20.5-8.5T765-847l121 117q9 8 9.5 20.5T887-688Z"
+        )
+    }
+
+    /** Charging. Material Symbols bolt. */
+    val Bolt: ImageVector by lazy {
+        symbol("Bolt", "M360-360H217q-18 0-26.5-16t2.5-31l338-488q8-11 20-15t24 1q12 5 19 16t5 24l-39 309h176q19 0 27 17t-4 32L388-66q-8 10-20.5 13T344-55q-11-5-17.5-16T322-95l38-265Z")
+    }
+
+    /** Missed calls. Material Symbols phone_missed. */
+    val PhoneMissed: ImageVector by lazy {
+        symbol(
+            "PhoneMissed",
+            "m136-146-94-94q-9-9-8.5-21t8.5-22q82-96 197-146.5T480-480q126 0 241 50.5T918-283q8 10 8.5 22t-8.5 21l-94 94q-8 8-23 9t-24-6l-114-85q-6-5-9-11t-3-13v-139q-42-16-85.5-22.5T480-420q-42 0-85.5 6.5T309-391v139q0 7-3 13t-9 11l-114 85q-12 9-24.5 8T136-146Zm80.5-477.5Q208-632 208-645v-165q0-13 8.5-21.5T238-840h165q13 0 21.5 8.5T433-810q0 13-8.5 21.5T403-780h-96l173 171 210-210q9-9 21.5-9.5T733-820q9 9 9 21.5t-9 21.5L522-566q-18 18-43 18t-42-18L268-737v92q0 13-8.5 21.5T238-615q-13 0-21.5-8.5Z"
+        )
+    }
+
+    /** Unread messages. Material Symbols sms. */
+    val Sms: ImageVector by lazy {
+        symbol(
+            "Sms",
+            "M240-240 131-131q-14 14-32.5 6.34Q80-132.31 80-152v-668q0-24 18-42t42-18h680q24 0 42 18t18 42v520q0 24-18 42t-42 18H240Zm94.5-294.5Q346-546 346-563t-11.5-28.5Q323-603 306-603t-28.5 11.5Q266-580 266-563t11.5 28.5Q289-523 306-523t28.5-11.5Zm177 0Q523-546 523-563t-11.5-28.5Q500-603 483-603t-28.5 11.5Q443-580 443-563t11.5 28.5Q466-523 483-523t28.5-11.5Zm170 0Q693-546 693-563t-11.5-28.5Q670-603 653-603t-28.5 11.5Q613-580 613-563t11.5 28.5Q636-523 653-523t28.5-11.5Z"
+        )
+    }
+
+    /** The ringer on vibrate. Material Symbols mobile_vibrate. */
+    val Vibrate: ImageVector by lazy {
+        symbol(
+            "Vibrate",
+            "M301-120q-24.75 0-42.37-17.63Q241-155.25 241-180v-600q0-24.75 17.63-42.38Q276.25-840 301-840h359q24.75 0 42.38 17.62Q720-804.75 720-780v600q0 24.75-17.62 42.37Q684.75-120 660-120H301Zm199-529q9-9 9-21t-9-21q-9-9-21-9t-21 9q-9 9-9 21t9 21q9 9 21 9t21-9ZM0-395v-170q0-12.75 8.68-21.38 8.67-8.62 21.5-8.62 12.82 0 21.32 8.62Q60-577.75 60-565v170q0 12.75-8.68 21.37-8.67 8.63-21.5 8.63Q17-365 8.5-373.63 0-382.25 0-395Zm120 88v-346q0-12.75 8.68-21.38 8.67-8.62 21.5-8.62 12.82 0 21.32 8.62 8.5 8.63 8.5 21.38v346q0 12.75-8.68 21.37-8.67 8.63-21.5 8.63-12.82 0-21.32-8.63-8.5-8.62-8.5-21.37Zm780-88v-170q0-12.75 8.68-21.38 8.67-8.62 21.5-8.62 12.82 0 21.32 8.62 8.5 8.63 8.5 21.38v170q0 12.75-8.68 21.37-8.67 8.63-21.5 8.63-12.82 0-21.32-8.63-8.5-8.62-8.5-21.37Zm-120 88v-346q0-12.75 8.68-21.38 8.67-8.62 21.5-8.62 12.82 0 21.32 8.62 8.5 8.63 8.5 21.38v346q0 12.75-8.68 21.37-8.67 8.63-21.5 8.63-12.82 0-21.32-8.63-8.5-8.62-8.5-21.37Z"
+        )
+    }
+
+    /** The ringer silent. Material Symbols volume_off. */
+    val SilentRinger: ImageVector by lazy {
+        symbol(
+            "SilentRinger",
+            "M681-188q-17 12-35.5 22T607-148q-12 5-24.5 0T565-165q-5-11 .5-22t17.5-16q15-5 28.5-12t26.5-17L473-397v165q0 20-18.5 27.5T422-211L273-360H143q-13 0-21.5-8.5T113-390v-180q0-13 8.5-21.5T143-600h126L70-799q-9-9-8.5-21.5T71-842q9-9 21.5-9t21.5 9l721 721q9 9 9 21.5T835-78q-9 9-22 9t-22-9L681-188Zm92-293q0-93-52.5-168.5T583-759q-12-5-17-16t0-22q5-12 17.5-16.5t25.5.5q101 41 162.5 130.5T833-481q0 38-7.5 75T802-334q-8 17-19.5 20.5T760-315q-11-5-16.5-14.5t.5-20.5q15-30 22-63t7-68ZM576-628q38 23 57.5 63.5T653-480v15q0 7-2 15-2 10-11 13t-17-5l-61-61q-5-5-7-10t-2-11v-91q0-9 7.5-13.5t15.5.5Zm-196-57q-5-5-5-11t5-11l42-42q14-14 32.5-6.5T473-728v100q0 10-9.5 13.5T447-618l-67-67Z"
+        )
+    }
+
+    /** Do not disturb. Material Symbols do_not_disturb_on. */
+    val DoNotDisturb: ImageVector by lazy {
+        symbol(
+            "DoNotDisturb",
+            "M310-453h340q12.75 0 21.38-8.68 8.62-8.67 8.62-21.5 0-12.82-8.62-21.32-8.63-8.5-21.38-8.5H310q-12.75 0-21.37 8.68-8.63 8.67-8.63 21.5 0 12.82 8.63 21.32 8.62 8.5 21.37 8.5ZM480.27-80q-82.74 0-155.5-31.5Q252-143 197.5-197.5t-86-127.34Q80-397.68 80-480.5t31.5-155.66Q143-709 197.5-763t127.34-85.5Q397.68-880 480.5-880t155.66 31.5Q709-817 763-763t85.5 127Q880-563 880-480.27q0 82.74-31.5 155.5Q817-252 763-197.68q-54 54.31-127 86Q563-80 480.27-80Z"
+        )
+    }
+
+    // A Material Symbols icon: Store's builder on the symbols' 960 grid, whose paths run from y -960 to 0 (a group moves them down).
+    private fun symbol(name: String, pathData: String): ImageVector =
+        ImageVector.Builder(
+            name = name,
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 960f,
+            viewportHeight = 960f
+        ).apply {
+            addGroup(translationY = 960f)
+            addPath(
+                pathData = PathParser().parsePathString(pathData).toNodes(),
+                fill = SolidColor(Color.Black)
+            )
+            clearGroup()
+        }.build()
+
     // Store's AppIcons.build.
     private fun build(name: String, pathData: String): ImageVector =
         ImageVector.Builder(
