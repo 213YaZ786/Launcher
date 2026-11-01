@@ -17,8 +17,8 @@ android {
         applicationId = "com.yaz.launcher"
         minSdk = 31
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
     }
 
     signingConfigs {
@@ -117,6 +117,10 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.koin.android)
     implementation(libs.koin.compose)
+    // Installs assets/dexopt/baseline.prof (from baseline-prof.txt) at the first launch after each update, as SMS does
+    // (YAZ/SMS at HEAD, app/build.gradle.kts; Google, Apache-2.0,
+    // https://github.com/androidx/androidx/tree/androidx-main/profileinstaller/profileinstaller).
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)

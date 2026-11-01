@@ -3,6 +3,7 @@ package com.yaz.launcher.navigation
 // Ported from Store (YAZ/Store at HEAD, navigation/StoreApp.kt), itself from Files and Calculator (https://github.com/213YaZ786/Calculator, navigation/CalculatorApp.kt):
 // the NavHost and PlainBack (the base kit's). One route for now, Home; the panels come with the next lot.
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import android.net.Uri
@@ -33,15 +34,20 @@ object Routes {
 }
 
 // Store's StoreApp (YAZ/Store at HEAD, navigation/StoreApp.kt): Home, Settings and the guide shown again from Settings' About.
+// [homeSignal] goes up each time Home is pressed while the app runs (MainActivity.onNewIntent, Trebuchet's Launcher.onNewIntent
+// https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java): every route above Home
+// is left, as popBackStack(route, inclusive = false) does (https://developer.android.com/guide/navigation/backstack#pop), the animation being the pop's.
 @Composable
-fun LauncherApp() {
+fun LauncherApp(homeSignal: Int = 0) {
     val nav = rememberNavController()
     val store: SettingsStore = koinInject()
     val settings by store.settings.collectAsState()
+    LaunchedEffect(homeSignal) { if (homeSignal > 0) nav.popBackStack(Routes.HOME, inclusive = false) }
 
     NavHost(nav, startDestination = Routes.HOME) {
         composable(Routes.HOME) {
             HomeScreen(
+                homeSignal = homeSignal,
                 onSettings = { nav.navigate(Routes.SETTINGS) },
                 onActivities = { nav.navigate(Routes.activities(it)) }
             )

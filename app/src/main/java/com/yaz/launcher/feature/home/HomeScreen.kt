@@ -116,7 +116,7 @@ import org.koin.compose.koinInject
  * Activities screen of a package.
  */
 @Composable
-fun HomeScreen(onSettings: () -> Unit = {}, onActivities: (String) -> Unit = {}) {
+fun HomeScreen(homeSignal: Int = 0, onSettings: () -> Unit = {}, onActivities: (String) -> Unit = {}) {
     val model: LauncherModel = koinInject()
     val store: SettingsStore = koinInject()
     val state by model.state.collectAsState()
@@ -178,7 +178,7 @@ fun HomeScreen(onSettings: () -> Unit = {}, onActivities: (String) -> Unit = {})
     val layout = PanelLayout(left = settings.swipeRight, right = settings.swipeLeft, bottom = settings.swipeUp)
     HomeContent(
         state, settings.themeMode, actions, panelOpacity = settings.panelOpacity, iconShape = settings.iconShape, themedIcons = settings.themedIcons,
-        edgeTabs = settings.edgeTabs, marks = AppMarks(dots, updates), pinned = pinned, layout = layout
+        edgeTabs = settings.edgeTabs, marks = AppMarks(dots, updates), pinned = pinned, layout = layout, homeSignal = homeSignal
     )
 }
 
@@ -202,7 +202,9 @@ fun HomeContent(
     /** The activities pinned at the head of the Apps panel. */
     pinned: List<PinnedRow> = emptyList(),
     /** Which panel each edge holds. */
-    layout: PanelLayout = PanelLayout()
+    layout: PanelLayout = PanelLayout(),
+    /** Goes up each time Home is pressed while the app runs: the open panel closes (Trebuchet's Launcher.onNewIntent closes its floating views). */
+    homeSignal: Int = 0
 ) {
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
@@ -240,6 +242,7 @@ fun HomeContent(
         scope.launch { side.animateTo(Side.CLOSED, spring) }
         scope.launch { sheet.animateTo(Sheet.CLOSED, spring) }
     }
+    LaunchedEffect(homeSignal) { if (homeSignal > 0) close() }
     val anyOpen = side.targetValue != Side.CLOSED || sheet.targetValue != Sheet.CLOSED
     // Back on the home screen does nothing: Trebuchet's Launcher.onBackPressed hands Back to its callbacks, ends in the state handler and
     // never calls finish() (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java).

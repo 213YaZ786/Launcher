@@ -82,6 +82,10 @@
     <string name="settings_about">About</string>
     <string name="settings_version">Launcher %1$s</string>
     <string name="settings_version_summary">The home app: a panel for each swipe.</string>
+    <string name="settings_updates">Updates</string>
+    <string name="settings_updates_off">Off</string>
+    <string name="settings_updates_notify">Notify me</string>
+    <string name="settings_updates_install">Install automatically</string>
     <string name="settings_guide">Guide</string>
     <string name="settings_guide_value">Show again</string>
     <string name="settings_guide_summary">See the welcome pages again</string>

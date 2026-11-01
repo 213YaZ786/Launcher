@@ -16,15 +16,72 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
+import android.util.LruCache
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import com.yaz.launcher.data.apps.IconLayers
+import com.yaz.launcher.data.settings.IconShape
 import java.nio.ByteBuffer
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.withContext
 
 // The pictures an icon is drawn from, at the size shown (px by px), so the screen only scales nothing and clips to the shape.
 // A layer is 108 dp for a 72 dp icon: AdaptiveIconDrawable.getExtraInsetFraction() (1/4) on each side of the visible square, so a layer
 // drawn into bounds that start at -extra * px and end at (1 + extra) * px puts the visible part exactly on the bitmap
 // (BaseIconFactory.drawIconBitmap and MonoIconThemeController.ClippedMonoDrawable, an InsetDrawable of -extra, do the same;
 // https://github.com/LineageOS/android_frameworks_libs_systemui/tree/lineage-22.2/iconloaderlib/src/com/android/launcher3/icons).
+
+/** What makes one finished icon picture: the app's activity in its profile, its layers (by identity: an updated package brings new ones), the size, the shape and the theme. */
+data class IconKey(
+    val id: String,
+    val layers: IconLayers,
+    val px: Int,
+    val shape: IconShape,
+    val themed: Boolean,
+    /** The themed icon's ground and tint; 0 when the icon is not themed, so a colour change does not renew the plain pictures. */
+    val ground: Int,
+    val tint: Int
+)
+
+/**
+ * The finished icon pictures, kept and built off the main thread, so a column that scrolls into view does not draw bitmaps on a frame.
+ * - The idea is Trebuchet's IconCache (bitmaps cached by component and user, loaded by a background worker, the screen showing a default
+ *   until the entry arrives; LineageOS Trebuchet lineage-22.2, Apache-2.0,
+ *   https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/icons/IconCache.java), whose work runs on one thread (MODEL_EXECUTOR): [dispatcher] is one too, because
+ *   the layers' drawables are shared and Drawable.setBounds is not thread-safe.
+ * - The memory cache is Android's "Caching bitmaps" recipe (https://developer.android.com/topic/performance/graphics/cache-bitmap):
+ *   android.util.LruCache with sizeOf the bitmap's byteCount and a size of a sixteenth of the app's memory. Difference: the recipe takes
+ *   an eighth of it in kilobytes; bytes are kept here so the sizes are exact.
+ */
+object IconCache {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1)
+
+    private val cache = object : LruCache<IconKey, ImageBitmap>((Runtime.getRuntime().maxMemory() / 16).toInt().coerceAtLeast(1)) {
+        override fun sizeOf(key: IconKey, value: ImageBitmap): Int = value.asAndroidBitmap().byteCount
+    }
+
+    /** The picture if it was built before, else null. Cheap: fit for a composition. */
+    fun get(key: IconKey): ImageBitmap? = cache.get(key)
+
+    /** Builds the picture on the calling thread (the previews and the screenshot tests, which wait for no worker). */
+    fun build(key: IconKey): ImageBitmap {
+        cache.get(key)?.let { return it }
+        // The shape is cut into the bitmap with an anti-aliased mask (see [masked]); a new shape, theme or colour is a new key.
+        val mask = key.shape.toAndroidPath(key.px)
+        val themed = if (key.themed) renderThemedIcon(key.layers, key.px, mask, key.ground, key.tint) else null
+        val picture = (themed ?: renderIcon(key.layers, key.px, mask)).asImageBitmap()
+        cache.put(key, picture)
+        return picture
+    }
+
+    /** Builds the picture on the icon worker. */
+    suspend fun load(key: IconKey): ImageBitmap = cache.get(key) ?: withContext(dispatcher) { build(key) }
+}
 
 /** The icon in colour: background then foreground, [px] wide, cut to [mask] (the shape's path at [px], IconShape.toAndroidPath). */
 fun renderIcon(layers: IconLayers, px: Int, mask: Path): Bitmap {

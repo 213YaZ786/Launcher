@@ -20,6 +20,23 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * The apps of a locked private space are not listed, only its header is shown. After PrivateProfileManager: in STATE_DISABLED (the space is
+ * locked, `isQuietModeEnabled`) the private apps are not added to the list and only the header with its lock button stays, and
+ * `isPrivateSpaceHidden` / `setQuietMode` follow the profile's quiet state
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateProfileManager.java).
+ * Difference: Trebuchet filters in its adapter items, here the list is filtered where the model is built, so the Hidden apps screen
+ * does not list a locked private app either. The work profile is not touched.
+ */
+object LockedPrivate {
+    /** [items] without those of a PRIVATE profile (their [kindOf]) whose [ProfileInfo.quiet] is true. */
+    fun <T : Listed> without(items: List<T>, profiles: List<ProfileInfo>, kindOf: (T) -> ProfileKind): List<T> {
+        val locked = profiles.filter { it.kind == ProfileKind.PRIVATE && it.quiet }.map { it.serial }.toSet()
+        if (locked.isEmpty()) return items
+        return items.filterNot { kindOf(it) == ProfileKind.PRIVATE && it.userSerial in locked }
+    }
+}
+
 /** What the panels show. */
 data class LauncherState(
     val loaded: Boolean = false,
@@ -132,7 +149,8 @@ class LauncherModel(
     private fun build(apps: AppsState, use: UsageSnapshot, gone: Map<String, Long>, hidden: Set<String>): LauncherState {
         // The filter is applied where the list is built, as Trebuchet applies HiddenAppsFilter in the loader: a hidden package is in
         // neither panel nor Recents (Recents is made from the ranked list below), only in [LauncherState.hidden].
-        val (shown, hiddenEntries) = apps.apps.partition { HiddenAppsFilter.shouldShowApp(hidden, it.packageName) }
+        // A locked private space shows its header only, no app anywhere (PrivateProfileManager, see [LockedPrivate]).
+        val (shown, hiddenEntries) = LockedPrivate.without(apps.apps, apps.profiles, { it.profile }).partition { HiddenAppsFilter.shouldShowApp(hidden, it.packageName) }
         val main = shown.filter { it.profile == ProfileKind.MAIN }
         val ranked = AppRanking.rank(main, Usage.foregroundByPackage(use.rows))
         val byPackage = ranked.groupBy { it.packageName }

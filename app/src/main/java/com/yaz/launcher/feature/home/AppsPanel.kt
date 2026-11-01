@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,7 +26,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -116,8 +116,10 @@ fun AppsPanel(
             // The work profile and the private space, each with its apps (an empty one still shows its title and button).
             val profiles = state.profiles.filter { it.kind == ProfileKind.WORK || it.kind == ProfileKind.PRIVATE }
             val count = pinned.size + state.apps.size + profiles.sumOf { profile -> 1 + state.others.count { it.userSerial == profile.serial } }
-            // At least two rows, so a title and its button fit in a short list.
+            // At least two rows, so a title and its button fit in a short list. The empty cells that start each block in a new column
+            // are not counted: they only fill what is left of a column.
             val shownRows = count.coerceIn(minOf(2, rows), rows)
+            val blocks = profileBlocks(pinned.size + state.apps.size, shownRows, profiles.map { profile -> state.others.filter { it.userSerial == profile.serial } })
 
             // The block of rows is centred in the pane; the grid is as tall as its rows, so each track is one row high.
             Column(Modifier.align(Alignment.Center).fillMaxWidth()) {
@@ -132,12 +134,16 @@ fun AppsPanel(
                     itemsIndexed(state.apps, key = { _, entry -> entry.listKey() }) { index, entry ->
                         AppCell(entry, iconSize, actions, seen, index, Modifier.width(columnWidth))
                     }
-                    profiles.forEach { profile ->
-                        // The title column spans every row: a title is text, without a zone, and its button is the one tap.
-                        item(key = "profile/" + profile.serial, span = { GridItemSpan(maxLineSpan) }) {
+                    profiles.forEachIndexed { b, profile ->
+                        // A profile starts a new column at its first row: empty cells fill the rest of the column before it, then its
+                        // title and button are one ordinary cell, and its apps follow below in the same column.
+                        items(blocks[b].padding, key = { "pad/" + profile.serial + "/" + it }) {
+                            Spacer(Modifier.width(columnWidth))
+                        }
+                        item(key = "profile/" + profile.serial) {
                             ProfileHeader(profile, actions, Modifier.width(columnWidth))
                         }
-                        val own = state.others.filter { it.userSerial == profile.serial }
+                        val own = blocks[b].apps
                         itemsIndexed(own, key = { _, entry -> entry.listKey() }) { index, entry ->
                             AppCell(entry, iconSize, actions, seen, index, Modifier.width(columnWidth))
                         }
@@ -164,15 +170,37 @@ private fun ProfileHeader(profile: ProfileInfo, actions: HomeActions, modifier: 
             else -> R.string.apps_lock
         }
     )
+    // One cell of the grid, as wide and as high as an app's: the title then its button, centred. The title is text, without a zone, and
+    // shrinks (Compose's TextAutoSize, down to 9 sp, two lines at most) rather than being cut; the button is the one tap.
+    val style = MaterialTheme.typography.titleMedium
     Column(modifier.fillMaxHeight(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
+        BasicText(
             title,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary,
-            textAlign = TextAlign.Center,
+            style = style.copy(color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center),
+            maxLines = 2,
+            autoSize = TextAutoSize.StepBased(minFontSize = 9.sp, maxFontSize = style.fontSize, stepSize = 0.5.sp),
             modifier = Modifier.padding(horizontal = 4.dp)
         )
         QuietButton(onClick = { actions.setQuiet(profile, !profile.quiet) }) { Text(action, textAlign = TextAlign.Center) }
+    }
+}
+
+// A profile's block of the grid: the empty cells that fill the column before it, and its apps. Trebuchet's AlphabeticalAppsList puts the
+// private space's header as one item of the list, before its apps, after the others
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/AlphabeticalAppsList.java).
+internal class ProfileBlock<T>(val padding: Int, val apps: List<T>)
+
+// The blocks of the work profile and the private space, each starting at the first row of a new column: [placed] cells come before the first,
+// the column is [rows] cells high, and what is left of the current column ((rows - placed % rows) % rows cells) is filled with empty cells;
+// the block is then its header (one cell) and its apps, the next one counting from there. [apps] is the list of each profile's apps.
+// Trebuchet's list order (the profiles' apps after the others, AlphabeticalAppsList) in Compose's LazyHorizontalGrid, which fills a column
+// top to bottom then the next (https://developer.android.com/develop/ui/compose/lists, "Lazy grids"); the padding is this app's.
+internal fun <T> profileBlocks(placed: Int, rows: Int, apps: List<List<T>>): List<ProfileBlock<T>> {
+    var used = placed
+    return apps.map { own ->
+        val padding = (rows - used % rows) % rows
+        used += padding + 1 + own.size
+        ProfileBlock(padding, own)
     }
 }
 

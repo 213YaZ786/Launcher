@@ -75,6 +75,15 @@ object Fixtures {
         others = workApps + privateApps
     )
 
+    // Few apps, so the work profile and the private space begin in the columns that show: each block starts at the first row of a new column.
+    private val fewApps = apps.take(5)
+
+    /** The work profile running with its apps, the private space locked: its header only, no private app listed. */
+    val withLockedPrivate = withProfiles.copy(apps = fewApps, recents = fewApps, others = workApps)
+
+    /** The work profile paused and the private space unlocked, few apps: both blocks start a column of their own. */
+    val withUnlockedPrivate = withPausedWork.copy(apps = fewApps, recents = fewApps)
+
     /** Usage access not granted: A to Z, no Recents. */
     val noUsage = LauncherState(loaded = true, usageGranted = false, apps = apps.sortedBy { it.label })
 

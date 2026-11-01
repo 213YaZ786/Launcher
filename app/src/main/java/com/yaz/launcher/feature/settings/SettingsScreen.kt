@@ -48,6 +48,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -56,6 +57,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.yaz.launcher.BuildConfig
 import com.yaz.launcher.R
+import com.yaz.launcher.core.update.UpdateMode
+import com.yaz.launcher.core.update.Updates
 import com.yaz.launcher.data.settings.IconShape
 import com.yaz.launcher.data.settings.PanelKind
 import com.yaz.launcher.data.settings.Settings
@@ -92,7 +95,7 @@ import com.yaz.launcher.ui.icon.toComposeShape
 import kotlin.math.roundToInt
 import org.koin.compose.koinInject
 
-private enum class OpenDialog { NONE, THEME, SHAPE, OPACITY, EDGE_TABS, SWIPE_LEFT, SWIPE_RIGHT, SWIPE_UP }
+private enum class OpenDialog { NONE, THEME, SHAPE, OPACITY, EDGE_TABS, SWIPE_LEFT, SWIPE_RIGHT, SWIPE_UP, UPDATES }
 
 /** The groups of settings: folded one under another on a phone, a list and the open one's page on a wide window. */
 private const val APPEARANCE = "appearance"
@@ -112,6 +115,7 @@ fun SettingsScreen(onBack: () -> Unit, onGuide: () -> Unit, onHidden: () -> Unit
         onPanelOpacity = { percent -> store.update { it.copy(panelOpacity = percent.coerceIn(0, 100)) } },
         onEdgeTabs = { percent -> store.update { it.copy(edgeTabs = percent.coerceIn(0, 100)) } },
         onPanel = { swipe, kind -> store.update { it.withPanel(swipe, kind) } },
+        onUpdates = { mode -> store.update { it.copy(updates = mode) } },
         onHidden = onHidden,
         onGuide = onGuide
     )
@@ -131,9 +135,11 @@ fun SettingsContent(
     onPanelOpacity: (Int) -> Unit = {},
     onEdgeTabs: (Int) -> Unit = {},
     onPanel: (Swipe, PanelKind) -> Unit = { _, _ -> },
+    onUpdates: (UpdateMode) -> Unit = {},
     onHidden: () -> Unit = {},
     onGuide: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     var dialog by rememberSaveable { mutableStateOf(OpenDialog.NONE) }
     // The tile whose long press is open (its id), "" when none.
     var tileId by rememberSaveable { mutableStateOf("") }
@@ -160,6 +166,8 @@ fun SettingsContent(
     val swipeUp = stringResource(R.string.settings_swipe_up)
     val hidden = stringResource(R.string.settings_hidden)
     val guide = stringResource(R.string.settings_guide)
+    val updates = stringResource(R.string.settings_updates)
+    val updatesName = updatesLabel(settings.updates)
     val version = stringResource(R.string.settings_version, BuildConfig.VERSION_NAME)
 
     val sections = listOf(
@@ -228,6 +236,12 @@ fun SettingsContent(
                 id = "guide", name = guide, title = guide, icon = AppIcons.Play,
                 value = stringResource(R.string.settings_guide_value), summary = stringResource(R.string.settings_guide_summary),
                 onClick = onGuide
+            ),
+            // The Updates tile of SMS's About, as is (YAZ/SMS, app/src/main/java/com/yaz/sms/feature/settings/SettingsScreen.kt, "updates").
+            SettingsActionTile(
+                id = "updates", name = updates, title = updates, icon = AppIcons.Update,
+                value = updatesName, summary = updatesName,
+                onClick = { dialog = OpenDialog.UPDATES }
             ),
             SettingsActionTile(
                 id = "version", name = version, title = version, icon = AppIcons.Info,
@@ -308,9 +322,32 @@ fun SettingsContent(
         OpenDialog.SWIPE_LEFT -> PanelDialog(swipeLeft, settings.panelOf(Swipe.LEFT), { onPanel(Swipe.LEFT, it) }, close)
         OpenDialog.SWIPE_RIGHT -> PanelDialog(swipeRight, settings.panelOf(Swipe.RIGHT), { onPanel(Swipe.RIGHT, it) }, close)
         OpenDialog.SWIPE_UP -> PanelDialog(swipeUp, settings.panelOf(Swipe.UP), { onPanel(Swipe.UP, it) }, close)
+        // SMS's UPDATES dialog (https://github.com/213YaZ786/SMS/blob/main/app/src/main/java/com/yaz/sms/feature/settings/SettingsScreen.kt):
+        // the choice is kept, and installing asks Android's leave when chosen.
+        OpenDialog.UPDATES -> ChoiceDialog(
+            title = updates,
+            options = UpdateMode.entries.map { it to updatesLabel(it) },
+            selected = settings.updates,
+            onPick = { mode ->
+                onUpdates(mode)
+                // Installing needs Android's leave, asked when chosen.
+                if (mode == UpdateMode.INSTALL && !Updates.canInstall(context)) Updates.allowInstalls(context)
+            },
+            onDismiss = close
+        )
         OpenDialog.NONE -> Unit
     }
 }
+
+// SMS's updatesLabel (https://github.com/213YaZ786/SMS/blob/main/app/src/main/java/com/yaz/sms/feature/settings/SettingsScreen.kt), the words in strings.xml.
+@Composable
+private fun updatesLabel(mode: UpdateMode): String = stringResource(
+    when (mode) {
+        UpdateMode.OFF -> R.string.settings_updates_off
+        UpdateMode.NOTIFY -> R.string.settings_updates_notify
+        UpdateMode.INSTALL -> R.string.settings_updates_install
+    }
+)
 
 // The panel a swipe opens: Apps, Recents or Nothing, in the suite's ChoiceDialog like the theme dialog above. The list of actions per gesture is
 // Kvaesitso's (idea only, GPL-3.0, https://github.com/MM2-0/Kvaesitso/blob/main/app/ui/src/main/java/de/mm20/launcher2/ui/settings/gestures/GestureSettingsScreen.kt).

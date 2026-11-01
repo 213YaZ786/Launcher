@@ -16,22 +16,26 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.unit.Dp
 import com.yaz.launcher.data.apps.AppEntry
 import com.yaz.launcher.data.apps.ProfileInfo
 import com.yaz.launcher.data.settings.IconShape
 import com.yaz.launcher.data.settings.PinnedActivity
 import com.yaz.launcher.ui.component.ZoneSurface
-import com.yaz.launcher.ui.icon.renderIcon
-import com.yaz.launcher.ui.icon.renderThemedIcon
-import com.yaz.launcher.ui.icon.toAndroidPath
+import com.yaz.launcher.ui.icon.IconCache
+import com.yaz.launcher.ui.icon.IconKey
 import com.yaz.launcher.ui.icon.toComposeShape
 
 /** How the app icons are drawn: the shape the user chose, and whether the icons with a monochrome layer take the theme's colours. */
@@ -42,7 +46,7 @@ val LocalIconStyle = compositionLocalOf { IconStyle() }
 
 /**
  * The icon of [entry], [size] wide, in a pane of glass of the chosen shape. The two layers of the icon are cut to the shape (the
- * pictures are made at the size shown, [renderIcon]); themed, the monochrome picture is tinted with onPrimaryContainer on a
+ * pictures are made at the size shown, kept by IconCache and built off the main thread); themed, the monochrome picture is tinted with onPrimaryContainer on a
  * primaryContainer ground, as Launcher3's ThemedIconDrawable draws it in its themed_icon_color over themed_icon_background_color
  * (https://github.com/LineageOS/android_frameworks_libs_systemui/blob/lineage-22.2/iconloaderlib/src/com/android/launcher3/icons/mono/ThemedIconDrawable.kt,
  * SRC_IN colour filters on the mono bitmap and the background); the Material You roles stand for the two fixed colours. An icon without
@@ -57,13 +61,13 @@ fun AppIcon(entry: AppEntry, size: Dp, modifier: Modifier = Modifier) {
     val px = with(LocalDensity.current) { size.roundToPx() }.coerceAtLeast(1)
     val ground = colors.primaryContainer.toArgb()
     val tint = colors.onPrimaryContainer.toArgb()
-    // The shape is cut into the bitmap with an anti-aliased mask (AdaptiveIconDrawable.draw, see IconRender.kt), so no Compose clip is left on
-    // the picture; a new shape, theme or colour makes a new bitmap.
-    val picture = remember(entry.icon, px, style.shape, style.themed, ground, tint) {
-        val mask = style.shape.toAndroidPath(px)
-        val themed = if (style.themed) renderThemedIcon(entry.icon, px, mask, ground, tint) else null
-        (themed ?: renderIcon(entry.icon, px, mask)).asImageBitmap()
-    }
+    // The picture comes from IconCache (Trebuchet's IconCache idea, see IconRender.kt): a hit is read at once, in the same composition; else
+    // it is built on the icon worker and the pane shows alone until it arrives, so scrolling a new column draws no bitmap on the main thread.
+    // The previews and the screenshot tests (inspection mode) wait for no worker and build it in place.
+    val inspection = LocalInspectionMode.current
+    val key = IconKey(entry.listKey(), entry.icon, px, style.shape, style.themed, if (style.themed) ground else 0, if (style.themed) tint else 0)
+    var picture by remember(key) { mutableStateOf(IconCache.get(key) ?: if (inspection) IconCache.build(key) else null) }
+    LaunchedEffect(key) { if (picture == null) picture = IconCache.load(key) }
     val badge = remember(entry.icon) { entry.icon.badge?.asImageBitmap() }
     val marks = LocalAppMarks.current
     // The marks sit over the pane: the notification dot on the shape's edge, the update mark at the bottom start.
@@ -71,8 +75,10 @@ fun AppIcon(entry: AppEntry, size: Dp, modifier: Modifier = Modifier) {
         // The pane alone: the picture is drawn over it, not inside it, because the pane's surface clips its content to the shape with a
         // hard edge, which would cut the anti-aliased one again.
         ZoneSurface(shape = shape, modifier = Modifier.size(size)) { }
-        Image(picture, contentDescription = null, modifier = Modifier.size(size))
-        if (badge != null) Image(badge, contentDescription = null, modifier = Modifier.size(size))
+        picture?.let { ready ->
+            Image(ready, contentDescription = null, modifier = Modifier.size(size))
+            if (badge != null) Image(badge, contentDescription = null, modifier = Modifier.size(size))
+        }
         if (marks.update(entry)) UpdateMark(size * 0.36f, Modifier.align(Alignment.BottomStart))
         if (marks.dot(entry)) NotificationDot(shape, size)
     }

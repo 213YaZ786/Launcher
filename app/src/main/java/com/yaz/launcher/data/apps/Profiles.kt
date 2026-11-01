@@ -82,10 +82,16 @@ object Profiles {
         override fun getIntrinsicWidth(): Int = 1
     }
 
-    /** The broadcasts that tell a profile came, went, was paused or locked (UserCache.initAsync's list). */
+    /**
+     * The broadcasts that tell a profile came, went, was paused or locked (UserCache.initAsync's list). The private space sends
+     * PROFILE_AVAILABLE and PROFILE_UNAVAILABLE when it is unlocked or locked, which UserCache adds to its filter for the private space
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/pm/UserCache.java);
+     * the private space exists from Android 15 (VANILLA_ICE_CREAM), so the two are listened to from there.
+     */
     internal fun actions(sdk: Int): List<String> {
         val atLeastU = sdk >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
-        return listOf(
+        val atLeastV = sdk >= Build.VERSION_CODES.VANILLA_ICE_CREAM
+        return listOfNotNull(
             Intent.ACTION_MANAGED_PROFILE_AVAILABLE,
             Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE,
             Intent.ACTION_MANAGED_PROFILE_REMOVED,
@@ -93,8 +99,8 @@ object Profiles {
             if (atLeastU) Intent.ACTION_PROFILE_REMOVED else Intent.ACTION_MANAGED_PROFILE_REMOVED,
             if (atLeastU) Intent.ACTION_PROFILE_ACCESSIBLE else Intent.ACTION_MANAGED_PROFILE_UNLOCKED,
             if (atLeastU) Intent.ACTION_PROFILE_INACCESSIBLE else Intent.ACTION_MANAGED_PROFILE_UNAVAILABLE,
-            ACTION_PROFILE_AVAILABLE,
-            ACTION_PROFILE_UNAVAILABLE
+            if (atLeastV) ACTION_PROFILE_AVAILABLE else null,
+            if (atLeastV) ACTION_PROFILE_UNAVAILABLE else null
         ).distinct()
     }
 

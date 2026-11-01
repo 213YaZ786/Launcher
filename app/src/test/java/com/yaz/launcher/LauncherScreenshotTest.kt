@@ -111,6 +111,18 @@ class LauncherScreenshotTest {
         Wallpaper { HomeContent(Fixtures.withPausedWork, ThemeMode.SYSTEM, HomeActions(), initial = Panel.RIGHT) }
     }
 
+    // Few apps: each profile starts a new column at its first row; the private space locked shows its header only, then unlocked with its apps. Taken as
+    // the tests above are (Store's StoreScreenshotTest, https://github.com/213YaZ786/Store/blob/main/app/src/test/java/com/yaz/store/StoreScreenshotTest.kt).
+    @Test
+    fun appsPanelWithLockedPrivate() = capture("apps_panel_locked_private") {
+        Wallpaper { HomeContent(Fixtures.withLockedPrivate, ThemeMode.SYSTEM, HomeActions(), initial = Panel.RIGHT) }
+    }
+
+    @Test
+    fun appsPanelWithUnlockedPrivate() = capture("apps_panel_unlocked_private") {
+        Wallpaper { HomeContent(Fixtures.withUnlockedPrivate, ThemeMode.SYSTEM, HomeActions(), initial = Panel.RIGHT) }
+    }
+
     @Test
     fun recentsPanel() = capture("recents_panel") {
         Wallpaper { HomeContent(Fixtures.full, ThemeMode.SYSTEM, HomeActions(), initial = Panel.BOTTOM) }

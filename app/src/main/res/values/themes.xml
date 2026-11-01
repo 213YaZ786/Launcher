@@ -1,9 +1,12 @@
 <resources>
     <!-- The window is transparent over the wallpaper: windowBackground transparent and windowShowWallpaper, as Trebuchet's
          BaseLauncherTheme (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/res/values/styles.xml). -->
+    <!-- Window.setBackgroundBlurRadius (WindowBlur.kt) needs a translucent window: windowIsTranslucent is set as in the doc's "Background blur"
+         (https://source.android.com/docs/core/display/window-blurs). The home already shows the wallpaper through, so nothing else changes. -->
     <style name="Theme.Launcher" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowShowWallpaper">true</item>
+        <item name="android:windowIsTranslucent">true</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>

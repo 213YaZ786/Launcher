@@ -2,9 +2,11 @@ package com.yaz.launcher.ui.component
 
 // The wallpaper blurred behind the panels, in proportion to how far a panel is open.
 // - The window API is the official recipe (https://source.android.com/docs/core/display/window-blurs, "Blur behind" and "Guidelines to use
-//   window blur in apps"): FLAG_BLUR_BEHIND on the window, WindowManager.LayoutParams.blurBehindRadius with `window.attributes` set again on each
-//   change, WindowManager.addCrossWindowBlurEnabledListener added when the decor view attaches and removed when it detaches, and a fallback while
-//   blurs are off (the home screen's scrim is then at least 85 % strong). The doc warns above 150 px, kept as the cap.
+//   window blur in apps"): Window.setBackgroundBlurRadius (the doc's "Background blur", API 31: the blur is drawn under the window surface by the
+//   RenderThread with the frame, with no WindowManager relayout per step as `window.attributes = ...` with blurBehindRadius made, which showed
+//   the blur late and closed it with lag; the window must be translucent, see themes.xml), WindowManager.addCrossWindowBlurEnabledListener
+//   added when the decor view attaches and removed when it detaches, and a fallback while blurs are off (the home screen's scrim is then at
+//   least 85 % strong). The doc warns above 150 px, kept as the cap. minSdk is 31: no SDK guard.
 // - The radius is the Quick Settings shade's (LineageOS android_frameworks_base, Apache-2.0, lineage-22.2): NotificationShadeDepthController gives
 //   blurUtils.blurRadiusOfRatio(ShadeInterpolation.getNotificationScrimAlpha(shadeExpansion))
 //   (https://github.com/LineageOS/android_frameworks_base/blob/lineage-22.2/packages/SystemUI/src/com/android/systemui/shade/NotificationShadeDepthController.kt),
@@ -18,7 +20,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.view.View
-import android.view.WindowManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -56,7 +57,6 @@ fun rememberWindowBlur(progress: () -> Float): Boolean {
     // The listener follows the decor view's attachment, as in the doc's MainActivity.
     DisposableEffect(window, manager) {
         if (window == null || manager == null) return@DisposableEffect onDispose {}
-        window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
         val listener = Consumer<Boolean> { on -> enabled = on }
         var registered = false
         fun register() {
@@ -82,8 +82,7 @@ fun rememberWindowBlur(progress: () -> Float): Boolean {
         onDispose {
             decor.removeOnAttachStateChangeListener(attach)
             unregister()
-            window.clearFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-            setRadius(window, 0)
+            window.setBackgroundBlurRadius(0)
         }
     }
 
@@ -93,7 +92,7 @@ fun rememberWindowBlur(progress: () -> Float): Boolean {
             if (enabled) blurRadiusOfRatio(ShadeInterpolation.getNotificationScrimAlpha(progressNow().coerceIn(0f, 1f)), full) else 0
         }
             .distinctUntilChanged()
-            .collect { radius -> setRadius(window, radius) }
+            .collect { radius -> window.setBackgroundBlurRadius(radius) }
     }
     return enabled
 }
@@ -103,14 +102,6 @@ fun rememberWindowBlur(progress: () -> Float): Boolean {
 private fun blurRadiusOfRatio(ratio: Float, full: Float): Int {
     if (ratio == 0f) return 0
     return (MIN_BLUR_PX + (full - MIN_BLUR_PX) * ratio).roundToInt().coerceAtMost(MAX_BLUR_PX)
-}
-
-// The doc's updateWindowForBlurs: the radius set on the attributes, which are then assigned back to the window.
-private fun setRadius(window: android.view.Window, radius: Int) {
-    val attributes = window.attributes
-    if (attributes.blurBehindRadius == radius) return
-    attributes.blurBehindRadius = radius
-    window.attributes = attributes
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
