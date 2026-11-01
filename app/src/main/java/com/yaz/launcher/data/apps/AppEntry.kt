@@ -39,7 +39,12 @@ class AppEntry(
     override val userSerial: Long,
     val profile: ProfileKind,
     /** The icon's layers, already loaded; the profile's badge is apart, drawn by the screen over the shape. */
-    val icon: IconLayers
+    val icon: IconLayers,
+    /**
+     * What the icon was made from (the package's apk path, version, flags, the screen density): the same stamp means the same icon, so
+     * the entry is kept and its layers with it (the caches of the screen read the layers by identity).
+     */
+    val stamp: String = ""
 ) : Listed {
     // The icon counts (by identity): a package updated with a new icon must reach the flow that shows it.
     override fun equals(other: Any?): Boolean = other is AppEntry && key == other.key && label == other.label && icon === other.icon

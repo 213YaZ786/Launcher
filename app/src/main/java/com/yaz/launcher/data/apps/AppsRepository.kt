@@ -1,6 +1,7 @@
 package com.yaz.launcher.data.apps
 
 import android.content.Context
+import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
@@ -49,8 +50,11 @@ class AppsRepository(
 
     private val model = io.limitedParallelism(1)
     private val callbacks = ModelLauncherCallbacks(::onPackages)
-    private val profileEvents = ProfileEvents(app) { scope.launch(model) { loadAll() } }
+    private val profileEvents = ProfileEvents(app) { scope.launch(model) { loadAll(onlyChanged = true) } }
     private var started = false
+
+    /** The package callbacks not yet applied: one pass of [applyPackages] takes them all, so a burst makes one state. */
+    private val pending = ArrayList<Triple<PackageOp, UserHandle, List<String>>>()
 
     /** Registers for the changes and loads. Called when the screen comes to the front. */
     fun start() {
@@ -58,7 +62,7 @@ class AppsRepository(
         started = true
         launcherApps.registerCallback(callbacks)
         profileEvents.start()
-        scope.launch(model) { loadAll() }
+        scope.launch(model) { loadAll(onlyChanged = false) }
     }
 
     /** Stops listening. Called when the screen goes. */
@@ -69,56 +73,112 @@ class AppsRepository(
         profileEvents.stop()
     }
 
-    /** LoaderTask.loadAllApps. */
-    private fun loadAll() {
+    /**
+     * LoaderTask.loadAllApps (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/LoaderTask.java).
+     * With [onlyChanged] (a profile event), only the profiles that were added, removed or whose state changed are read again, as
+     * PackageUpdatedTask's OP_USER_AVAILABILITY_CHANGE touches only that user's items, `ItemInfoMatcher.ofUser(mUser)`
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/PackageUpdatedTask.java,
+     * [Profiles.changed]); the entries of the others stay the same objects, so their icons stay in the screen's caches. In a profile that is
+     * read, an entry whose package was not updated is kept too ([entriesOf]). StateFlow publishes only a value that differs: an event that
+     * changed nothing makes no new state.
+     */
+    private fun loadAll(onlyChanged: Boolean) {
+        val before = _state.value
         val profiles = Profiles.queryAll(app)
-        val apps = profiles.flatMap { entriesOf(it, null) }
+        val reload = if (onlyChanged && before.loaded) Profiles.changed(before.profiles, profiles) else null
+        val previous = before.apps.associateBy { it.key }
+        val apps = profiles.flatMap { profile ->
+            if (reload != null && profile.serial !in reload) before.apps.filter { it.userSerial == profile.serial } else entriesOf(profile, null, previous)
+        }
         _state.value = AppsState(loaded = true, profiles = profiles, apps = apps)
     }
 
-    /** The package callbacks: AllAppsList's addPackage, updatePackage and removePackage on the list. */
-    private fun onPackages(op: PackageOp, user: android.os.UserHandle, packages: List<String>) {
-        scope.launch(model) {
-            var profiles = _state.value.profiles
+    /** The package callbacks: AllAppsList's addPackage, updatePackage and removePackage on the list, in one pass for the burst ([applyPackages]). */
+    private fun onPackages(op: PackageOp, user: UserHandle, packages: List<String>) {
+        synchronized(pending) { pending.add(Triple(op, user, packages)) }
+        scope.launch(model) { applyPackages() }
+    }
+
+    /**
+     * Applies every callback waiting, then publishes once, and only if the list changed: PackageUpdatedTask runs its operation and ends with
+     * bindApplicationsIfNeeded (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/PackageUpdatedTask.java),
+     * which binds only if AllAppsList.getAndResetChangeFlag says something changed (see [AppList.sameEntries]). Locking or unlocking the
+     * private space makes Android call onPackagesAvailable or onPackagesUnavailable for each of its packages in a row: they are taken
+     * together here, and the entries that did not change are kept ([entriesOf]), so they make no new state.
+     */
+    private fun applyPackages() {
+        val tasks = synchronized(pending) { pending.toList().also { pending.clear() } }
+        if (tasks.isEmpty()) return
+        val before = _state.value
+        val previous = before.apps.associateBy { it.key }
+        var profiles = before.profiles
+        var apps = before.apps
+        for ((op, user, packages) in tasks) {
             var profile = profiles.firstOrNull { it.user == user }
             if (profile == null) {
                 // A profile that came after the last load.
                 profiles = Profiles.queryAll(app)
-                profile = profiles.firstOrNull { it.user == user } ?: return@launch
+                profile = profiles.firstOrNull { it.user == user } ?: continue
             }
-            var apps = _state.value.apps
             for (pkg in packages) {
                 apps = if (op == PackageOp.REMOVE) {
                     AppList.removePackage(apps, pkg, profile.serial)
                 } else {
-                    AppList.updatePackage(apps, pkg, profile.serial, entriesOf(profile, pkg))
+                    AppList.updatePackage(apps, pkg, profile.serial, entriesOf(profile, pkg, previous))
                 }
             }
-            _state.value = _state.value.copy(profiles = profiles, apps = apps)
         }
+        val same = AppList.sameEntries(before.apps, apps)
+        if (same && profiles == before.profiles) return
+        _state.value = before.copy(profiles = profiles, apps = if (same) before.apps else apps)
     }
 
     /**
      * The launcher activities of [profile], of one package or of all. The icon is the activity's own, LauncherActivityInfo.getIcon(0),
      * in layers ([IconLayers.of]); the profile's badge comes apart ([badgeOf]), drawn by the screen over the shape. The label is
      * LauncherActivityInfo.getLabel.
+     *
+     * An activity that is in [previous] (the same component in the same profile) with the same label and the same [stampOf] is not built
+     * again: the old entry, with its IconLayers, is returned, as Trebuchet's AllAppsList.updatePackage / IconCache.updateTitleAndIcon only
+     * reload the icon of a package that was replaced (PackageUpdatedTask OP_UPDATE), where here a new object would miss the icon caches.
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/PackageUpdatedTask.java)
      */
-    private fun entriesOf(profile: ProfileInfo, packageName: String?): List<AppEntry> {
+    private fun entriesOf(profile: ProfileInfo, packageName: String?, previous: Map<AppKey, AppEntry>): List<AppEntry> {
         val activities = runCatching { launcherApps.getActivityList(packageName, profile.user) }.getOrNull().orEmpty()
-        val badge = if (profile.kind == ProfileKind.MAIN) null else badgeOf(profile.user)
+        val badge by lazy { if (profile.kind == ProfileKind.MAIN) null else badgeOf(profile.user) }
         return activities.mapNotNull { info ->
             runCatching {
-                AppEntry(
-                    packageName = info.componentName.packageName,
-                    className = info.componentName.className,
-                    label = info.label.toString(),
-                    user = profile.user,
-                    userSerial = profile.serial,
-                    profile = profile.kind,
-                    icon = IconLayers.of(info.getIcon(0), badge)
-                )
+                val label = info.label.toString()
+                val stamp = stampOf(info)
+                val kept = previous[AppKey(info.componentName.packageName, info.componentName.className, profile.serial)]
+                if (kept != null && kept.stamp == stamp && kept.label == label && kept.profile == profile.kind) {
+                    kept
+                } else {
+                    AppEntry(
+                        packageName = info.componentName.packageName,
+                        className = info.componentName.className,
+                        label = label,
+                        user = profile.user,
+                        userSerial = profile.serial,
+                        profile = profile.kind,
+                        icon = IconLayers.of(info.getIcon(0), badge),
+                        stamp = stamp
+                    )
+                }
             }.getOrNull()
         }
+    }
+
+    /**
+     * What an icon was made from: the apk path (Android 11 and later gives a package's base apk a new random directory at each install or
+     * update), the split apks and the flags (suspended) of the ApplicationInfo
+     * (https://developer.android.com/reference/android/content/pm/ApplicationInfo#sourceDir,
+     * https://developer.android.com/reference/android/content/pm/ApplicationInfo#splitSourceDirs), and the screen density the icon was loaded at
+     * (Configuration.densityDpi). LauncherActivityInfo has no update time (only getFirstInstallTime, which an update does not change).
+     */
+    private fun stampOf(info: LauncherActivityInfo): String {
+        val application = info.applicationInfo
+        return "${application.sourceDir}|${application.splitSourceDirs?.joinToString(",")}|${application.flags}|${app.resources.configuration.densityDpi}"
     }
 
     /**

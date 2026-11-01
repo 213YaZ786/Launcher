@@ -66,8 +66,14 @@ fun AppIcon(entry: AppEntry, size: Dp, modifier: Modifier = Modifier) {
     // The previews and the screenshot tests (inspection mode) wait for no worker and build it in place.
     val inspection = LocalInspectionMode.current
     val key = IconKey(entry.listKey(), entry.icon, px, style.shape, style.themed, if (style.themed) ground else 0, if (style.themed) tint else 0)
-    var picture by remember(key) { mutableStateOf(IconCache.get(key) ?: if (inspection) IconCache.build(key) else null) }
-    LaunchedEffect(key) { if (picture == null) picture = IconCache.load(key) }
+    // The app keeps its last picture while the new one is built (key changed, listKey the same: a new shape, a new theme colour, an updated package):
+    // Trebuchet's BubbleTextView keeps drawing its icon until applyIconAndLabel sets the new one
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/BubbleTextView.java).
+    // Only a first appearance (another app in the slot) shows the pane alone.
+    val listKey = entry.listKey()
+    var held by remember(listKey) { mutableStateOf(IconCache.get(key) ?: if (inspection) IconCache.build(key) else null) }
+    LaunchedEffect(key) { held = IconCache.load(key) }
+    val picture = IconCache.get(key) ?: held
     val badge = remember(entry.icon) { entry.icon.badge?.asImageBitmap() }
     val marks = LocalAppMarks.current
     // The marks sit over the pane: the notification dot on the shape's edge, the update mark at the bottom start.

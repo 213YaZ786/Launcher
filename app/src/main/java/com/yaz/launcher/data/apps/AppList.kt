@@ -25,4 +25,12 @@ object AppList {
 
     /** A profile that went: all its apps leave (UserCache's removal event, then the loader reloads without it). */
     fun <T : Listed> removeProfile(list: List<T>, userSerial: Long): List<T> = list.filterNot { it.userSerial == userSerial }
+
+    /**
+     * Whether [a] and [b] hold the same entries, whatever their order. AllAppsList keeps a change flag (`mDataChanged`, read and reset by
+     * getAndResetChangeFlag) and PackageUpdatedTask binds the apps again only if it is set (bindApplicationsIfNeeded), so a callback that
+     * changed nothing makes no new state
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/AllAppsList.java).
+     */
+    fun <T : Listed> sameEntries(a: List<T>, b: List<T>): Boolean = a.size == b.size && a.toSet() == b.toSet()
 }

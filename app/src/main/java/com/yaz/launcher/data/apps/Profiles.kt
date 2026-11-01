@@ -76,6 +76,19 @@ object Profiles {
         }
     }
 
+    /**
+     * The serials of the profiles to load again after an event: those added, removed, or whose kind, quiet or unlocked state differs.
+     * Trebuchet's PackageUpdatedTask with OP_USER_AVAILABILITY_CHANGE touches only that user's items (`ItemInfoMatcher.ofUser(mUser)`),
+     * the other profiles' icons are not reloaded
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/PackageUpdatedTask.java).
+     * The broadcast does not say which profile it is about, so the new list is compared with the old.
+     */
+    fun changed(old: List<ProfileInfo>, new: List<ProfileInfo>): Set<Long> {
+        val before = old.associateBy { it.serial }
+        val after = new.associateBy { it.serial }
+        return after.filter { (serial, info) -> before[serial] != info }.keys + (before.keys - after.keys)
+    }
+
     /** ApiWrapper.NoopDrawable: a drawable of one pixel, which Android returns as it is unless the user is badged. */
     private class NoopDrawable : ColorDrawable() {
         override fun getIntrinsicHeight(): Int = 1
