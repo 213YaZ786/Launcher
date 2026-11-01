@@ -9,8 +9,12 @@ package com.yaz.launcher.feature.home
 // written for either axis and either way out: a drag the list cannot use moves the panel (onPostScroll), a drag back first
 // returns the panel to its open place (onPreScroll), and the fling settles the state (onPreFling, onPostFling).
 import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.animate
 import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.animateTo
+import kotlin.math.abs
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -44,18 +48,117 @@ data class PanelLayout(
 /** The offset, 0 until the anchors are set. */
 internal fun AnchoredDraggableState<*>.offsetOrZero(): Float = offset.let { if (it.isNaN()) 0f else it }
 
+// The release thresholds of Trebuchet's touch controllers.
+/** LauncherAnimUtils.SUCCESS_TRANSITION_PROGRESS, the share of the travel that commits any other transition (lineage-22.2, src/com/android/launcher3/LauncherAnimUtils.java). */
+private const val SUCCESS_TRANSITION_PROGRESS = 0.5f
+
+/** LauncherAnimUtils.TABLET_BOTTOM_SHEET_SUCCESS_TRANSITION_PROGRESS, the share that commits the Apps sheet on a tablet. */
+private const val TABLET_BOTTOM_SHEET_SUCCESS_TRANSITION_PROGRESS = 0.3f
+
+/** AllAppsSwipeController.ALL_APPS_STATE_TRANSITION_MANUAL: opening Apps on a phone needs more than 0.4 of the travel, closing it more than 1 - 0.4. */
+private const val ALL_APPS_STATE_TRANSITION_MANUAL = 0.4f
+
+/**
+ * The share of the travel a release must pass to commit, as AbstractStateChangeTouchController.onDragEnd chooses `successTransitionProgress`
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/AbstractStateChangeTouchController.java):
+ * on a tablet 0.3 whenever Apps is one end; on a phone 0.4 from home to Apps and 1 - 0.4 from Apps to home; 0.5 for the rest (Recents,
+ * Trebuchet's Overview). [fromApps] and [toApps] say that the end the drag comes from, or goes to, is the Apps panel; the other end is
+ * always home (closed) or Recents here, as the panels are neighbours of the closed place.
+ */
+internal fun successProgress(tablet: Boolean, fromApps: Boolean, toApps: Boolean): Float = when {
+    tablet && (toApps || fromApps) -> TABLET_BOTTOM_SHEET_SUCCESS_TRANSITION_PROGRESS
+    !tablet && toApps -> ALL_APPS_STATE_TRANSITION_MANUAL
+    !tablet && fromApps -> 1 - ALL_APPS_STATE_TRANSITION_MANUAL
+    else -> SUCCESS_TRANSITION_PROGRESS
+}
+
+/**
+ * Trebuchet's fling speed: BaseSwipeDetector.isFling is `abs(velocity) > mReleaseVelocity`, mReleaseVelocity being the pixel size of
+ * R.dimen.base_swift_detector_fling_release_velocity (1dp, res/values/dimens.xml), compared with a velocity in pixels per millisecond
+ * (computeCurrentVelocity(1000) / 1000): 1 dp per ms. Here the velocities are in pixels per second: [pxPerDp] times 1000.
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/BaseSwipeDetector.java)
+ */
+internal fun flingVelocityPx(pxPerDp: Float): Float = pxPerDp * 1000f
+
+/**
+ * Where a release ends, after AbstractStateChangeTouchController.onDragEnd (the same file as [successProgress]): the transition runs between
+ * two neighbouring anchors, `from` (the state the drag started in) and `to`. A fling (faster than [flingVelocity], px/s) goes to `to` if it
+ * points that way, else back to `from`; without a fling the drag commits to `to` when its progress passes [success]
+ * (`interpolatedProgress > successTransitionProgress`, linear here as AllAppsSwipeController's ALL_APPS_VERTICAL_PROGRESS_MANUAL), else it
+ * returns to `from`. Difference: Trebuchet keeps `mFromState` in the controller; here it is the state's [AnchoredDraggableState.settledValue],
+ * or the end of the segment nearer to it when the drag has crossed an anchor (reinitCurrentAnimation takes the reached state as the new from).
+ * Its FlingBlockCheck (a fling blocked at the start of a drag from home) is not ported.
+ */
+internal fun <T> AnchoredDraggableState<T>.releaseTarget(velocity: Float, flingVelocity: Float, success: (from: T, to: T) -> Float): T {
+    val offset = offsetOrZero()
+    val low = anchors.closestAnchor(offset, false) ?: return settledValue
+    val high = anchors.closestAnchor(offset, true) ?: return settledValue
+    val fling = abs(velocity) > flingVelocity
+    val lowAt = anchors.positionOf(low)
+    val highAt = anchors.positionOf(high)
+    if (lowAt == highAt) {
+        // On an anchor: a fling leaves it towards the next one (progress <= 0 in onDragEnd), anything else stays.
+        val next = if (fling) anchors.closestAnchor(offset + if (velocity > 0f) 1f else -1f, velocity > 0f) else null
+        return next ?: low
+    }
+    val settledAt = anchors.positionOf(settledValue)
+    val from = when {
+        settledValue == low -> low
+        settledValue == high -> high
+        settledAt.isNaN() -> low
+        abs(settledAt - lowAt) <= abs(settledAt - highAt) -> low
+        else -> high
+    }
+    val to = if (from == low) high else low
+    val fromAt = if (from == low) lowAt else highAt
+    val toAt = if (from == low) highAt else lowAt
+    val progress = abs(offset - fromAt) / abs(toAt - fromAt)
+    return if (fling) {
+        if ((velocity > 0f) == (toAt > fromAt)) to else from
+    } else {
+        if (progress > success(from, to)) to else from
+    }
+}
+
+/**
+ * The fling of the two panel states: [releaseTarget]'s end reached on [spec] from the finger's velocity (Trebuchet's onDragEnd animates the
+ * progress from where it is to the end; the spring is the panels' own). A FlingBehavior is Compose's hook of Modifier.anchoredDraggable
+ * (https://developer.android.com/develop/ui/compose/touch-input/pointer-input/drag-swipe-fling); its body follows foundation's
+ * snapFlingBehavior, which also runs `animate` and moves the offset by `scrollBy`
+ * (https://github.com/androidx/androidx/blob/androidx-main/compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehavior.kt).
+ * The built-in anchoredDraggableFlingBehavior has no velocity threshold to set (a fixed 125 dp/s), hence this one.
+ */
+internal fun <T> releaseFlingBehavior(
+    state: AnchoredDraggableState<T>,
+    flingVelocity: Float,
+    success: (from: T, to: T) -> Float,
+    spec: AnimationSpec<Float>
+): FlingBehavior = object : FlingBehavior {
+    override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+        val start = state.requireOffset()
+        val end = state.anchors.positionOf(state.releaseTarget(initialVelocity, flingVelocity, success))
+        var last = start
+        animate(start, end, initialVelocity, spec) { value, _ ->
+            scrollBy(value - last)
+            last = value
+        }
+        return 0f
+    }
+}
+
 /**
  * Closes the Apps panel open on [open] (left or right) with the drag the grid leaves over: at the grid's edge on the closing side, it
  * cannot go further and the panel follows the finger out; elsewhere the grid takes the swipe.
  */
 internal fun AnchoredDraggableState<Side>.closeWithScroll(
     open: Side,
-    minFling: Float,
+    flingVelocity: Float,
+    success: (from: Side, to: Side) -> Float,
     spec: AnimationSpec<Float>,
     gridAtEdge: () -> Boolean
 ): NestedScrollConnection =
     // The panel closes towards its edge: to the right for the right panel (+1), to the left for the left one (-1).
-    closeConnection(open, Side.CLOSED, if (open == Side.RIGHT) 1f else -1f, vertical = false, minFling = minFling, spec = spec, gridAtEdge = gridAtEdge)
+    closeConnection(open, if (open == Side.RIGHT) 1f else -1f, vertical = false, flingVelocity = flingVelocity, success = success, spec = spec, gridAtEdge = gridAtEdge)
 
 /**
  * Closes the Apps panel open at the bottom with the drag the vertical grid leaves over: the grid at its top cannot go further down, so the
@@ -64,10 +167,11 @@ internal fun AnchoredDraggableState<Side>.closeWithScroll(
  * https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/AllAppsSwipeController.java).
  */
 internal fun AnchoredDraggableState<Sheet>.closeWithScrollDown(
-    minFling: Float,
+    flingVelocity: Float,
+    success: (from: Sheet, to: Sheet) -> Float,
     spec: AnimationSpec<Float>,
     gridAtEdge: () -> Boolean
-): NestedScrollConnection = closeConnection(Sheet.OPEN, Sheet.CLOSED, 1f, vertical = true, minFling = minFling, spec = spec, gridAtEdge = gridAtEdge)
+): NestedScrollConnection = closeConnection(Sheet.OPEN, 1f, vertical = true, flingVelocity = flingVelocity, success = success, spec = spec, gridAtEdge = gridAtEdge)
 
 // The connection of Material 3's ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection (SheetDefaults.kt, vertical and closing downwards there): [vertical] picks the
 // axis, [out] the sign of the way out (+1 down or right, -1 left), [open] and [closed] the two places of the state.
@@ -78,10 +182,10 @@ internal fun AnchoredDraggableState<Sheet>.closeWithScrollDown(
 // closes only with a new gesture that begins at the edge.
 private fun <T> AnchoredDraggableState<T>.closeConnection(
     open: T,
-    closed: T,
     out: Float,
     vertical: Boolean,
-    minFling: Float,
+    flingVelocity: Float,
+    success: (from: T, to: T) -> Float,
     spec: AnimationSpec<Float>,
     gridAtEdge: () -> Boolean
 ): NestedScrollConnection = object : NestedScrollConnection {
@@ -100,16 +204,13 @@ private fun <T> AnchoredDraggableState<T>.closeConnection(
     private fun offsetOf(value: Float): Offset = if (vertical) Offset(0f, value) else Offset(value, 0f)
     private fun velocityOf(value: Float): Velocity = if (vertical) Velocity(0f, value) else Velocity(value, 0f)
 
-    // settleWith, after Material 3's SheetState.settle (https://github.com/androidx/androidx/blob/androidx-main/compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/SheetDefaults.kt):
-    // settle(velocity) is deprecated and throws on a state built without thresholds, so a fling faster than the platform's minimum
-    // (ViewConfiguration.getScaledMinimumFlingVelocity) goes the way it points, any other to the nearest anchor (settle(animationSpec)).
-    // The state is built without specs (its snapAnimationSpec is never set and throws): the caller's spring is passed in.
+    // settleWith, after Material 3's SheetState.settle (https://github.com/androidx/androidx/blob/androidx-main/compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/SheetDefaults.kt)
+    // for the animation, and Trebuchet's AbstractStateChangeTouchController.onDragEnd for the end: Trebuchet's fling speed (1 dp per ms) goes the
+    // way it points, any other release commits by the share of the travel passed ([releaseTarget], [successProgress]), where it used the
+    // platform's minimum fling and the nearest anchor. The state is built without specs (its snapAnimationSpec is never set and throws):
+    // the caller's spring is passed in.
     private suspend fun settleWith(velocity: Float) {
-        when {
-            velocity * out > minFling -> animateTo(closed, spec)
-            velocity * out < -minFling -> animateTo(open, spec)
-            else -> settle(spec)
-        }
+        animateTo(releaseTarget(velocity, flingVelocity, success), spec)
     }
 
     private fun partlyClosed(): Boolean = (offsetOrZero() - openAt) * out > 0f

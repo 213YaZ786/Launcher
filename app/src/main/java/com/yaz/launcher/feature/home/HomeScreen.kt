@@ -69,6 +69,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,7 +81,11 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import androidx.compose.ui.res.stringResource
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -253,7 +258,10 @@ fun HomeContent(
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val density = LocalDensity.current
-    val minFling = LocalViewConfiguration.current.minimumFlingVelocity.toFloat()
+    // Trebuchet's release thresholds (see successProgress and flingVelocityPx in PanelDrag.kt): a fling is over 1 dp per ms; a tablet is
+    // a smallest width of 600 dp (DeviceProfile.isTablet).
+    val flingVelocity = flingVelocityPx(with(density) { 1.dp.toPx() })
+    val tablet = LocalConfiguration.current.smallestScreenWidthDp >= 600
     val hasLeft = layout.left != PanelKind.NONE
     val hasRight = layout.right != PanelKind.NONE
     val hasBottom = layout.bottom != PanelKind.NONE
@@ -293,6 +301,24 @@ fun HomeContent(
 
     // A panel comes in and goes out on a spring, as the suite's panes pop.
     val spring = spring<Float>(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)
+    // Where a release ends: AbstractStateChangeTouchController.onDragEnd's rule, with the share of the travel that commits depending on whether
+    // Apps is one end (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/AbstractStateChangeTouchController.java).
+    val sideSuccess = remember(layout, tablet) {
+        { from: Side, to: Side ->
+            successProgress(
+                tablet,
+                fromApps = (from == Side.LEFT && layout.left == PanelKind.APPS) || (from == Side.RIGHT && layout.right == PanelKind.APPS),
+                toApps = (to == Side.LEFT && layout.left == PanelKind.APPS) || (to == Side.RIGHT && layout.right == PanelKind.APPS)
+            )
+        }
+    }
+    val sheetSuccess = remember(layout, tablet) {
+        { from: Sheet, to: Sheet ->
+            successProgress(tablet, fromApps = from == Sheet.OPEN && layout.bottom == PanelKind.APPS, toApps = to == Sheet.OPEN && layout.bottom == PanelKind.APPS)
+        }
+    }
+    val sideFling = remember(side, flingVelocity, sideSuccess) { releaseFlingBehavior(side, flingVelocity, sideSuccess, spring) }
+    val sheetFling = remember(sheet, flingVelocity, sheetSuccess) { releaseFlingBehavior(sheet, flingVelocity, sheetSuccess, spring) }
     val close: () -> Unit = {
         scope.launch { side.animateTo(Side.CLOSED, spring) }
         scope.launch { sheet.animateTo(Sheet.CLOSED, spring) }
@@ -315,7 +341,17 @@ fun HomeContent(
     BackHandler(enabled = true) { }
     // Back closes the open panel.
     BackHandler(enabled = anyOpen, onBack = close)
-    LaunchedEffect(anyOpen) { if (anyOpen) actions.refresh() }
+    // The order is fixed while a panel opens or is open, as Trebuchet fixes the apps list at bind (AlphabeticalAppsList.updateItemFilter and
+    // onAppsUpdated build the adapter items once per model change, never as the drawer moves,
+    // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/AlphabeticalAppsList.java):
+    // the usage is read again, and the apps and Recents ranked anew, only once every panel is back at rest, closed.
+    val refresh by rememberUpdatedState(actions.refresh)
+    LaunchedEffect(side, sheet) {
+        snapshotFlow {
+            kotlin.math.abs(side.offsetOrZero()) < 0.5f && kotlin.math.abs(sheet.offsetOrZero()) < 0.5f &&
+                side.targetValue == Side.CLOSED && sheet.targetValue == Sheet.CLOSED
+        }.distinctUntilChanged().drop(1).filter { it }.collect { refresh() }
+    }
     LaunchedEffect(side.settledValue, sheet.settledValue) {
         if (side.settledValue != Side.CLOSED || sheet.settledValue != Sheet.CLOSED) haptics.tick()
     }
@@ -470,8 +506,8 @@ fun HomeContent(
                     sideStartAtEdge = gridAtStart
                 }
                 // A swipe left or right brings in the panel of that edge, a swipe up the bottom one. Only one panel at a time.
-                .anchoredDraggable(side, Orientation.Horizontal, enabled = sheet.targetValue == Sheet.CLOSED && sideDrag && sideStartOk)
-                .anchoredDraggable(sheet, Orientation.Vertical, enabled = side.targetValue == Side.CLOSED && sheetDrag && sheetStartOk)
+                .anchoredDraggable(side, Orientation.Horizontal, enabled = sheet.targetValue == Sheet.CLOSED && sideDrag && sideStartOk, flingBehavior = sideFling)
+                .anchoredDraggable(sheet, Orientation.Vertical, enabled = side.targetValue == Side.CLOSED && sheetDrag && sheetStartOk, flingBehavior = sheetFling)
         ) {
             // The scrim, over the wallpaper and under the panels, drawn with the progress read in the draw phase; a tap on it closes the open panel.
             // With no panel open it is the wallpaper itself: a long press opens the Wallpaper and Settings menu (Compose's detectTapGestures,
@@ -521,7 +557,7 @@ fun HomeContent(
                 SidePanel(
                     layout.left, Panel.LEFT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
                     progress = leftProgress, travelX = { -sideTravel + side.offsetOrZero() },
-                    close = remember(side, minFling) { side.closeWithScroll(Side.LEFT, minFling, spring) { gridAtStart } },
+                    close = remember(side, flingVelocity, sideSuccess) { side.closeWithScroll(Side.LEFT, flingVelocity, sideSuccess, spring) { gridAtStart } },
                     open = leftVisible || side.targetValue == Side.LEFT
                 )
             }
@@ -529,7 +565,7 @@ fun HomeContent(
                 SidePanel(
                     layout.right, Panel.RIGHT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
                     progress = rightProgress, travelX = { sideTravel + side.offsetOrZero() },
-                    close = remember(side, minFling) { side.closeWithScroll(Side.RIGHT, minFling, spring) { gridAtStart } },
+                    close = remember(side, flingVelocity, sideSuccess) { side.closeWithScroll(Side.RIGHT, flingVelocity, sideSuccess, spring) { gridAtStart } },
                     open = rightVisible || side.targetValue == Side.RIGHT
                 )
             }
@@ -554,7 +590,7 @@ fun HomeContent(
                     state, pinned, panelActions, seen, bottomGrid,
                     edge = Panel.BOTTOM,
                     progress = bottomProgress,
-                    close = remember(sheet, minFling) { sheet.closeWithScrollDown(minFling, spring) { bottomGridAtTop } },
+                    close = remember(sheet, flingVelocity, sheetSuccess) { sheet.closeWithScrollDown(flingVelocity, sheetSuccess, spring) { bottomGridAtTop } },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = bottom)
