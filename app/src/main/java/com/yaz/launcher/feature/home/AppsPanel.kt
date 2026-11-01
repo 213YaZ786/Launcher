@@ -71,6 +71,7 @@ import com.yaz.launcher.ui.component.PillMotion
 import com.yaz.launcher.ui.component.entrancePop
 import com.yaz.launcher.ui.component.rememberPillMenu
 import com.yaz.launcher.ui.component.sinkClickable
+import com.yaz.launcher.ui.component.softTopEdge
 import com.yaz.launcher.ui.icon.AppIcons
 import kotlinx.coroutines.launch
 
@@ -133,7 +134,15 @@ fun AppsPanel(
                     columns = GridCells.Fixed(columns),
                     state = grid,
                     contentPadding = PaddingValues(top = TOP),
-                    modifier = Modifier.fillMaxSize()
+                    // What scrolls past the panel's top fades out as in SMS (FloatingPane.kt's softTopEdge, the panes kit), its strength the
+                    // scroll over the fade length as ScrollView.getTopFadingEdgeStrength
+                    // (https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/widget/ScrollView.java).
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .softTopEdge({ 0.dp }) {
+                            if (grid.firstVisibleItemIndex > 0) 1f
+                            else (grid.firstVisibleItemScrollOffset / with(density) { 16.dp.toPx() }).coerceIn(0f, 1f)
+                        }
                 ) {
                     appCells(pinned, state, profiles, blocks, columnWidth, iconSize, actions, seen)
                 }
