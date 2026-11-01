@@ -24,7 +24,9 @@ import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.yaz.launcher.data.settings.PanelKind
 import com.yaz.launcher.data.settings.ThemeMode
+import com.yaz.launcher.feature.home.PanelLayout
 import com.yaz.launcher.feature.home.Fixtures
 import com.yaz.launcher.feature.home.HomeActions
 import com.yaz.launcher.feature.home.HomeContent
@@ -122,6 +124,26 @@ class LauncherScreenshotTest {
     @Test
     fun appsPanelWithUnlockedPrivate() = capture("apps_panel_unlocked_private") {
         Wallpaper { HomeContent(Fixtures.withUnlockedPrivate, ThemeMode.SYSTEM, HomeActions(), initial = Panel.RIGHT) }
+    }
+
+    // Apps given to the swipe up (a vertical grid, screen wide) and to the swipe right (the left panel, the right one mirrored); taken as the
+    // tests above are (Store's StoreScreenshotTest, https://github.com/213YaZ786/Store/blob/main/app/src/test/java/com/yaz/store/StoreScreenshotTest.kt).
+    @Test
+    fun appsPanelFromTheBottom() = capture("apps_panel_bottom") {
+        Wallpaper {
+            HomeContent(Fixtures.withProfiles, ThemeMode.SYSTEM, HomeActions(), initial = Panel.BOTTOM, layout = PanelLayout(bottom = PanelKind.APPS))
+        }
+    }
+
+    // Same source: Store's StoreScreenshotTest (https://github.com/213YaZ786/Store/blob/main/app/src/test/java/com/yaz/store/StoreScreenshotTest.kt).
+    @Test
+    fun appsPanelFromTheLeft() = capture("apps_panel_left") {
+        Wallpaper {
+            HomeContent(
+                Fixtures.withProfiles, ThemeMode.SYSTEM, HomeActions(), initial = Panel.LEFT,
+                layout = PanelLayout(left = PanelKind.APPS, right = PanelKind.NONE)
+            )
+        }
     }
 
     @Test

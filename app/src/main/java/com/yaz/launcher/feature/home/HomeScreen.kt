@@ -229,15 +229,19 @@ fun HomeContent(
     val sheet = remember { AnchoredDraggableState(if (initial == Panel.BOTTOM && hasBottom) Sheet.OPEN else Sheet.CLOSED) }
     val seen = remember { mutableSetOf<String>() }
     var recentsHeight by remember { mutableIntStateOf(0) }
-    // The apps grid's scroll, kept here: a side Apps panel follows the drag only while the grid is at its edge on the closing side (the start
-    // for a panel on the right, the end for one on the left), and it starts again at the start once the panel has closed.
+    // The apps grid's scroll, kept here: a side Apps panel follows the drag only while the grid is at its start (the right panel's grid runs
+    // left to right, the left panel's is mirrored, so both close by a drag towards their edge at their first apps), and it starts again at the
+    // start once the panel has closed. The bottom panel has its own vertical grid, closing by a drag down at its top (Trebuchet's
+    // AllAppsSwipeController asks shouldContainerScroll first).
     val appsGrid = rememberLazyGridState()
+    val bottomGrid = rememberLazyGridState()
     val gridAtStart by remember { derivedStateOf { !appsGrid.canScrollBackward } }
-    val gridAtEnd by remember { derivedStateOf { !appsGrid.canScrollForward } }
-    val appsOpen = (side.settledValue == Side.LEFT && layout.left == PanelKind.APPS) ||
-        (side.settledValue == Side.RIGHT && layout.right == PanelKind.APPS) ||
-        (sheet.settledValue == Sheet.OPEN && layout.bottom == PanelKind.APPS)
-    LaunchedEffect(appsOpen) { if (!appsOpen) appsGrid.scrollToItem(0) }
+    val bottomGridAtTop by remember { derivedStateOf { !bottomGrid.canScrollBackward } }
+    val sideAppsOpen = (side.settledValue == Side.LEFT && layout.left == PanelKind.APPS) ||
+        (side.settledValue == Side.RIGHT && layout.right == PanelKind.APPS)
+    val bottomAppsOpen = sheet.settledValue == Sheet.OPEN && layout.bottom == PanelKind.APPS
+    LaunchedEffect(sideAppsOpen) { if (!sideAppsOpen) appsGrid.scrollToItem(0) }
+    LaunchedEffect(bottomAppsOpen) { if (!bottomAppsOpen) bottomGrid.scrollToItem(0) }
 
     // A panel comes in and goes out on a spring, as the suite's panes pop.
     val spring = spring<Float>(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)
@@ -336,9 +340,14 @@ fun HomeContent(
         val bottomVisible by remember { derivedStateOf { sheet.offsetOrZero() < -0.5f } }
         // A side panel with the Apps grid open takes the drag only at the grid's edge on the closing side (the grid takes the swipe elsewhere).
         val sideDrag = when (side.targetValue) {
-            Side.LEFT -> layout.left != PanelKind.APPS || gridAtEnd
+            Side.LEFT -> layout.left != PanelKind.APPS || gridAtStart
             Side.RIGHT -> layout.right != PanelKind.APPS || gridAtStart
             Side.CLOSED -> true
+        }
+        // The same for the bottom panel: its vertical grid takes the swipe except at its top.
+        val sheetDrag = when (sheet.targetValue) {
+            Sheet.OPEN -> layout.bottom != PanelKind.APPS || bottomGridAtTop
+            Sheet.CLOSED -> true
         }
 
         Box(
@@ -368,7 +377,7 @@ fun HomeContent(
                 }
                 // A swipe left or right brings in the panel of that edge, a swipe up the bottom one. Only one panel at a time.
                 .anchoredDraggable(side, Orientation.Horizontal, enabled = sheet.targetValue == Sheet.CLOSED && sideDrag)
-                .anchoredDraggable(sheet, Orientation.Vertical, enabled = side.targetValue == Side.CLOSED)
+                .anchoredDraggable(sheet, Orientation.Vertical, enabled = side.targetValue == Side.CLOSED && sheetDrag)
         ) {
             // The scrim, over the wallpaper and under the panels, drawn with the progress read in the draw phase; a tap on it closes the open panel.
             // With no panel open it is the wallpaper itself: a long press opens the Wallpaper and Settings menu (Compose's detectTapGestures,
@@ -434,9 +443,10 @@ fun HomeContent(
                 )
                 // Apps at the bottom is screen wide and half the screen high, its travel the same.
                 PanelKind.APPS -> AppsPanel(
-                    state, pinned, panelActions, seen, appsGrid,
+                    state, pinned, panelActions, seen, bottomGrid,
                     edge = Panel.BOTTOM,
                     progress = bottomProgress,
+                    close = remember(sheet, minFling) { sheet.closeWithScrollDown(minFling, spring) },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = bottom)

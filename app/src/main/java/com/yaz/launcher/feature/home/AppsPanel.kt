@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,8 +26,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
@@ -76,7 +80,7 @@ private const val COLUMNS = 3
  * of [progress], the panel's own opening 0 to 1 (SystemUI's ShadeInterpolation.getContentAlpha, ui/component/ShadeInterpolation.kt). [grid] is
  * the grid's state, kept by the screen. On a side ([edge] left or right) it is three columns wide and the panel closes by the drag when the
  * grid is at its edge on the closing side; [close] is the connection that lets the drag the grid cannot use pull the panel shut. At the bottom
- * it is as wide as the screen and shows as many columns as fit.
+ * it is as wide as the screen, shows as many columns as fit and scrolls up and down (a vertical grid, closing by a drag down at its top).
  *
  * The head holds the pinned activities as cells (sdex/ActivityManager's pinned shortcut), the end the work profile and the private space,
  * each opening with a tile that pauses or locks it, as the Pixel Launcher's and Trebuchet's drawer have their button (WorkProfileManager and
@@ -115,42 +119,78 @@ fun AppsPanel(
             val rows = (usable / rowHeight).toInt().coerceAtLeast(1)
             // The work profile and the private space, each with its apps (an empty one still shows its title and button).
             val profiles = state.profiles.filter { it.kind == ProfileKind.WORK || it.kind == ProfileKind.PRIVATE }
-            val count = pinned.size + state.apps.size + profiles.sumOf { profile -> 1 + state.others.count { it.userSerial == profile.serial } }
-            // At least two rows, so a title and its button fit in a short list. The empty cells that start each block in a new column
-            // are not counted: they only fill what is left of a column.
-            val shownRows = count.coerceIn(minOf(2, rows), rows)
-            val blocks = profileBlocks(pinned.size + state.apps.size, shownRows, profiles.map { profile -> state.others.filter { it.userSerial == profile.serial } })
+            val others = profiles.map { profile -> state.others.filter { it.userSerial == profile.serial } }
+            val placed = pinned.size + state.apps.size
 
-            // The block of rows is centred in the pane; the grid is as tall as its rows, so each track is one row high.
-            Column(Modifier.align(Alignment.Center).fillMaxWidth()) {
-                LazyHorizontalGrid(
-                    rows = GridCells.Fixed(shownRows),
+            if (edge == Panel.BOTTOM) {
+                // From the bottom the list goes up and down, as the Pixel Launcher's and Trebuchet's drawer: Compose's LazyVerticalGrid
+                // (https://developer.android.com/develop/ui/compose/lists, "Lazy grids"), a profile starting a new row (the rest of the
+                // row before it is empty cells), the Settings row the last item over the whole width. The panel closes by a drag down
+                // once the grid is at its top (the [close] connection).
+                val blocks = profileBlocks(placed, columns, others)
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns),
                     state = grid,
-                    modifier = Modifier.fillMaxWidth().height(rowHeight * shownRows)
+                    contentPadding = PaddingValues(top = TOP),
+                    modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(pinned, key = { _, row -> "pin/" + row.pin.packageName + "/" + row.pin.className + "/" + row.pin.userSerial }) { index, row ->
-                        PinnedCell(row, iconSize, actions, seen, index, Modifier.width(columnWidth))
-                    }
-                    itemsIndexed(state.apps, key = { _, entry -> entry.listKey() }) { index, entry ->
-                        AppCell(entry, iconSize, actions, seen, index, Modifier.width(columnWidth))
-                    }
-                    profiles.forEachIndexed { b, profile ->
-                        // A profile starts a new column at its first row: empty cells fill the rest of the column before it, then its
-                        // tile is one ordinary cell, drawn like an app, and its apps follow below in the same column.
-                        items(blocks[b].padding, key = { "pad/" + profile.serial + "/" + it }) {
-                            Spacer(Modifier.width(columnWidth))
-                        }
-                        item(key = "profile/" + profile.serial) {
-                            ProfileCell(profile, iconSize, actions, seen, Modifier.width(columnWidth))
-                        }
-                        val own = blocks[b].apps
-                        itemsIndexed(own, key = { _, entry -> entry.listKey() }) { index, entry ->
-                            AppCell(entry, iconSize, actions, seen, index, Modifier.width(columnWidth))
-                        }
-                    }
+                    appCells(pinned, state, profiles, blocks, columnWidth, iconSize, actions, seen)
+                    item(key = "settings", span = { GridItemSpan(maxLineSpan) }) { SettingsRow(actions.openSettings) }
                 }
-                SettingsRow(actions.openSettings)
+            } else {
+                // At least two rows, so a title and its button fit in a short list. The empty cells that start each block in a new column
+                // are not counted: they only fill what is left of a column.
+                val count = placed + profiles.indices.sumOf { 1 + others[it].size }
+                val shownRows = count.coerceIn(minOf(2, rows), rows)
+                val blocks = profileBlocks(placed, shownRows, others)
+
+                // The block of rows is centred in the pane; the grid is as tall as its rows, so each track is one row high. The panel on the
+                // left is the right one mirrored (reverseLayout, https://developer.android.com/develop/ui/compose/lists): its first apps sit
+                // at its right, next to the screen, and a swipe right brings the next columns.
+                Column(Modifier.align(Alignment.Center).fillMaxWidth()) {
+                    LazyHorizontalGrid(
+                        rows = GridCells.Fixed(shownRows),
+                        state = grid,
+                        reverseLayout = edge == Panel.LEFT,
+                        modifier = Modifier.fillMaxWidth().height(rowHeight * shownRows)
+                    ) {
+                        appCells(pinned, state, profiles, blocks, columnWidth, iconSize, actions, seen)
+                    }
+                    SettingsRow(actions.openSettings)
+                }
             }
+        }
+    }
+}
+
+// The cells of the grid, the same in both directions: the pinned activities, the apps, then each profile's block. A profile starts a new line
+// (a column sideways, a row from the bottom): empty cells fill the rest of the line before it, then its tile is one ordinary cell, drawn like
+// an app, and its apps follow.
+private fun LazyGridScope.appCells(
+    pinned: List<PinnedRow>,
+    state: LauncherState,
+    profiles: List<ProfileInfo>,
+    blocks: List<ProfileBlock<AppEntry>>,
+    columnWidth: Dp,
+    iconSize: Dp,
+    actions: HomeActions,
+    seen: MutableSet<String>
+) {
+    itemsIndexed(pinned, key = { _, row -> "pin/" + row.pin.packageName + "/" + row.pin.className + "/" + row.pin.userSerial }) { index, row ->
+        PinnedCell(row, iconSize, actions, seen, index, Modifier.width(columnWidth))
+    }
+    itemsIndexed(state.apps, key = { _, entry -> entry.listKey() }) { index, entry ->
+        AppCell(entry, iconSize, actions, seen, index, Modifier.width(columnWidth))
+    }
+    profiles.forEachIndexed { b, profile ->
+        items(blocks[b].padding, key = { "pad/" + profile.serial + "/" + it }) {
+            Spacer(Modifier.width(columnWidth))
+        }
+        item(key = "profile/" + profile.serial) {
+            ProfileCell(profile, iconSize, actions, seen, Modifier.width(columnWidth))
+        }
+        itemsIndexed(blocks[b].apps, key = { _, entry -> entry.listKey() }) { index, entry ->
+            AppCell(entry, iconSize, actions, seen, index, Modifier.width(columnWidth))
         }
     }
 }
