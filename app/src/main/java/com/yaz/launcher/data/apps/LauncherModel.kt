@@ -6,10 +6,13 @@ package com.yaz.launcher.data.apps
 // (https://developer.android.com/topic/architecture/data-layer, https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/combine.html);
 // the usage, ranking and recents are Taskbar's (https://github.com/farmerbb/Taskbar/blob/master/app/src/main/java/com/farmerbb/taskbar/ui/TaskbarController.java).
 import android.content.Context
-import android.database.ContentObserver
+import android.content.pm.LauncherApps
+import android.content.pm.LauncherUserInfo
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
+import android.os.UserHandle
+import android.os.UserManager
 import com.yaz.launcher.data.notify.DotKey
 import com.yaz.launcher.data.notify.NotificationDots
 import com.yaz.launcher.data.store.StoreMarks
@@ -71,40 +74,66 @@ object WorkProfileManager {
 }
 
 /**
- * The setting "Hide when locked" of the private space, Settings.Secure `hide_privatespace_entry_point` (hidden field
- * Settings.Secure.HIDE_PRIVATESPACE_ENTRY_POINT), read and watched as Trebuchet's SettingsCache does: `updateValue` reads
- * `Settings.Secure.getInt(resolver, key, default) == 1` (default 0 for this key), and a ContentObserver on the key's Uri, registered with
- * `registerContentObserver(uri, false, observer)` on a main-thread Handler, reads it again on each change
- * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/util/SettingsCache.java,
- * PRIVATE_SPACE_HIDE_WHEN_LOCKED_URI). Difference: the observer lives from [start] to [stop] only, the model's lifetime, where
- * SettingsCache lives with the app process, so nothing listens while no home screen is in front.
+ * The setting "Hide when locked" of the private space, read as a third-party launcher may: LauncherUserInfo.getUserConfig of the private profile,
+ * `PRIVATE_SPACE_ENTRYPOINT_HIDDEN` (Android 16), which UserManagerService.getLauncherUserInfo fills from the hidden Settings.Secure key
+ * `hide_privatespace_entry_point` and answers false when that key is not set
+ * (https://github.com/LineageOS/android_frameworks_base/blob/lineage-23.0/services/core/java/com/android/server/pm/UserManagerService.java#getLauncherUserInfo,
+ * https://github.com/LineageOS/android_frameworks_base/blob/lineage-23.0/core/java/android/content/pm/LauncherUserInfo.java#PRIVATE_SPACE_ENTRYPOINT_HIDDEN).
+ * A change reaches the launcher through LauncherApps.Callback.onUserConfigChanged
+ * (https://github.com/LineageOS/android_frameworks_base/blob/lineage-23.0/core/java/android/content/pm/LauncherApps.java#onUserConfigChanged).
+ * Differences: Trebuchet's SettingsCache and Launcher3's PrivateProfileManager.isPrivateSpaceHidden read the Settings key itself
+ * (https://github.com/GrapheneOS/platform_packages_apps_Launcher3/blob/17/src/com/android/launcher3/allapps/PrivateProfileManager.java#isPrivateSpaceHidden),
+ * which only a system app may do: for any other app Android throws a SecurityException ("Settings key ... is not readable"), which stopped this
+ * app at its start. The value counts only while the space is locked, as there ([LockedPrivate.visible]). The callback lives from [start] to
+ * [stop], the model's lifetime, so nothing listens while no home screen is in front.
  */
 class HideWhenLocked(context: Context) {
-    private val resolver = context.applicationContext.contentResolver
+    private val app = context.applicationContext
     private val _value = MutableStateFlow(false)
 
     /** True when the user hides the private space while it is locked. */
     val value: StateFlow<Boolean> = _value.asStateFlow()
 
-    private val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
-        override fun onChange(selfChange: Boolean) = read()
+    // LauncherApps.Callback: only onUserConfigChanged is used, the abstract methods stay empty.
+    private val callback = object : LauncherApps.Callback() {
+        override fun onPackageRemoved(packageName: String, user: UserHandle) = Unit
+        override fun onPackageAdded(packageName: String, user: UserHandle) = Unit
+        override fun onPackageChanged(packageName: String, user: UserHandle) = Unit
+        override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = Unit
+        override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) = Unit
+        override fun onUserConfigChanged(launcherUserInfo: LauncherUserInfo) = read()
     }
 
+    // UserManagerService.getLauncherUserInfo: the config of the private profile; false without one, when the key is not set, or when refused.
     private fun read() {
-        _value.value = Settings.Secure.getInt(resolver, KEY, 0) == 1
+        _value.value = try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) {
+                false
+            } else {
+                val users = app.getSystemService(UserManager::class.java)
+                val launcherApps = app.getSystemService(LauncherApps::class.java)
+                val infos = users?.userProfiles.orEmpty().mapNotNull { launcherApps?.getLauncherUserInfo(it) }
+                infos.firstOrNull { Profiles.kindOfUserType(it.userType) == ProfileKind.PRIVATE }
+                    ?.userConfig?.getBoolean(LauncherUserInfo.PRIVATE_SPACE_ENTRYPOINT_HIDDEN, false) ?: false
+            }
+        } catch (e: SecurityException) {
+            false
+        }
     }
 
     /** Reads the setting and follows it. Main thread. */
     fun start() {
         read()
-        resolver.registerContentObserver(Settings.Secure.getUriFor(KEY), false, observer)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            app.getSystemService(LauncherApps::class.java)?.registerCallback(callback, Handler(Looper.getMainLooper()))
+        }
     }
 
     /** Stops following. */
-    fun stop() = resolver.unregisterContentObserver(observer)
-
-    private companion object {
-        const val KEY = "hide_privatespace_entry_point"
+    fun stop() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            app.getSystemService(LauncherApps::class.java)?.unregisterCallback(callback)
+        }
     }
 }
 
