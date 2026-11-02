@@ -241,6 +241,10 @@ data class HomeActions(
     val openWallpaper: () -> Unit = {},
     /** Pauses or locks the profile ([quiet] true), or brings it back (false): the Apps panel's Pause, Resume, Lock and Unlock. */
     val setQuiet: (ProfileInfo, Boolean) -> Unit = { _, _ -> },
+    /** Opens the private space's settings (the gear of the unlocked private space). */
+    val openPrivateSpaceSettings: () -> Unit = {},
+    /** Opens the app market in the private space (the Install apps cell). */
+    val installToPrivateSpace: (ProfileInfo) -> Unit = {},
     /** A panel opened: read the usage again. */
     val refresh: () -> Unit = {},
     /** The app leaves the apps panel and Recents (Hide, in the long press menu). */

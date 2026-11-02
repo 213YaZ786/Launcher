@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -52,6 +53,21 @@ object LockedPrivate {
         if (locked.isEmpty()) return items
         return items.filterNot { kindOf(it) == ProfileKind.PRIVATE && it.userSerial in locked }
     }
+}
+
+/**
+ * What the work profile's state changes in the list. After WorkProfileManager: `shouldShowWorkApps` is `getCurrentState() != STATE_DISABLED`, and
+ * `addWorkItems` adds the disabled card (VIEW_TYPE_WORK_DISABLED_CARD, its title R.string.work_apps_paused_title) when the state is STATE_DISABLED
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/WorkProfileManager.java#addWorkItems).
+ * Differences: the card is the work tile itself (its label says the work apps are paused, Resume is its action), and the education card
+ * (VIEW_TYPE_WORK_EDU_CARD) is left out.
+ */
+object WorkProfileManager {
+    /** Returns whether or not work apps should be visible: the profile's state is not STATE_DISABLED. */
+    fun shouldShowWorkApps(currentState: Int): Boolean = currentState != UserProfileManager.STATE_DISABLED
+
+    /** Adds work profile specific items: true when the disabled card is added to the work block. */
+    fun addWorkItems(currentState: Int): Boolean = currentState == UserProfileManager.STATE_DISABLED
 }
 
 /**
@@ -105,7 +121,13 @@ data class LauncherState(
     /** The Recents panel: apps by last use, newest first. */
     val recents: List<AppEntry> = emptyList(),
     /** The apps the user hid, of every profile, A to Z: in no panel, only in the Hidden apps screen. */
-    val hidden: List<AppEntry> = emptyList()
+    val hidden: List<AppEntry> = emptyList(),
+    /** The state of the work profile and of the private space by serial ([UserProfileManager]'s STATE_*); a profile missing is STATE_UNKNOWN. */
+    val profileStates: Map<Long, Int> = emptyMap(),
+    /** PrivateProfileManager.isPrivateSpaceSettingsAvailable: the private space's settings can be opened (the gear). */
+    val privateSpaceSettingsAvailable: Boolean = false,
+    /** The app market has an intent in the private space (the Install apps cell). */
+    val privateSpaceInstallAvailable: Boolean = false
 )
 
 /**
@@ -149,6 +171,56 @@ class LauncherModel(
 
     private val hideWhenLocked = HideWhenLocked(app)
 
+    // The state of each profile (UserProfileManager): the work profile's and the private space's. It is published inside [state] (profileStates), in the
+    // same value as the profiles it was read from, so a tile never shows a quiet flag with the state of the one before.
+    private val userProfileManager = UserProfileManager()
+
+    // Every profile of the last load, before the private space is hidden: what [UserProfileManager.reset] reads.
+    @Volatile
+    private var mProfiles = emptyList<ProfileInfo>()
+
+    // PrivateProfileManager.initializeInBackgroundThread's answers for the private space as it was read (its serial and quiet flag).
+    private var mPrivateSpaceKey: Pair<Long, Boolean>? = null
+    private var mPrivateSpaceSettingsAvailable = false
+    private var mAppInstallerIntent = false
+
+    /**
+     * Initializes the binder call based properties off the main thread: the app market's intent in the private space
+     * (`getAppMarketActivityIntent(BuildConfig.APPLICATION_ID, profileUser)`) and whether the private space's settings page is available
+     * (`setPrivateSpaceSettingsAvailable(apiWrapper.getPrivateSpaceSettingsIntent() != null)`)
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateProfileManager.java#initializeInBackgroundThread).
+     * Asked again only when the private space changed (its quiet flag), not at every emission; only an unlocked space has either.
+     */
+    private fun initializeInBackgroundThread(profiles: List<ProfileInfo>) {
+        val profileUser = profiles.firstOrNull { it.kind == ProfileKind.PRIVATE }
+        val key = profileUser?.let { it.serial to it.quiet }
+        if (key == mPrivateSpaceKey) return
+        mPrivateSpaceKey = key
+        if (profileUser == null || profileUser.quiet) {
+            mAppInstallerIntent = false
+            mPrivateSpaceSettingsAvailable = false
+        } else {
+            mAppInstallerIntent = AppActions.getAppMarketActivityIntent(app, app.packageName, profileUser.user) != null
+            mPrivateSpaceSettingsAvailable = AppActions.getPrivateSpaceSettingsIntent(app) != null
+        }
+    }
+
+    /**
+     * A tap on a profile's tile: sets STATE_TRANSITION, then asks quiet mode. WorkProfileManager.setWorkProfileEnabled is
+     * `updateCurrentState(STATE_TRANSITION); setQuietMode(!enabled, context)`, and PrivateProfileManager.setQuietMode(enable) the same call
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/WorkProfileManager.java#setWorkProfileEnabled).
+     * While the profile is in STATE_TRANSITION a tap does nothing. The state leaves the TRANSITION when the quiet state arrives ([userProfileManager]'s
+     * reset, after the profile reload), or here when Android did not take the request. Answers [AppActions.setQuietModeSafely]'s answer: true when
+     * taken or when nothing was asked, false when refused, null when this app is not the home app (the home role was asked for through [context]).
+     */
+    suspend fun setWorkProfileEnabled(profile: ProfileInfo, enabled: Boolean, context: Context): Boolean? {
+        if (_state.value.profileStates[profile.serial] == UserProfileManager.STATE_TRANSITION) return true
+        _state.update { it.copy(profileStates = userProfileManager.setCurrentState(profile, UserProfileManager.STATE_TRANSITION)) }
+        val accepted = withContext(io) { AppActions.setQuietModeSafely(context, profile.user, !enabled) }
+        if (accepted != true) _state.update { it.copy(profileStates = userProfileManager.reset(mProfiles, force = true)) }
+        return accepted
+    }
+
     // The five flows' latest values, for kotlinx.coroutines' combine with five flows
     // (https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/combine.html).
     private data class Inputs(
@@ -172,7 +244,17 @@ class LauncherModel(
                 Inputs(apps, use, gone, hidden, hideLocked)
             }
                 .collect { (apps, use, gone, hidden, hideLocked) ->
-                    _state.value = withContext(Dispatchers.Default) { build(apps, use, gone, hidden, hideLocked) }
+                    val built = withContext(Dispatchers.Default) { build(apps, use, gone, hidden, hideLocked) }
+                    // The profiles' states are reset from this load (WorkProfileManager.reset, PrivateProfileManager.reset), in the same value as the profiles.
+                    mProfiles = apps.profiles
+                    initializeInBackgroundThread(apps.profiles)
+                    _state.update {
+                        built.copy(
+                            profileStates = userProfileManager.reset(apps.profiles),
+                            privateSpaceSettingsAvailable = mPrivateSpaceSettingsAvailable,
+                            privateSpaceInstallAvailable = mAppInstallerIntent
+                        )
+                    }
                     if (apps.loaded) {
                         val launchable = apps.apps.filter { it.profile == ProfileKind.MAIN }.map { it.packageName }.toSet()
                         removed.retain(Recents.prune(gone, launchable, System.currentTimeMillis()))
@@ -196,6 +278,8 @@ class LauncherModel(
      * AlphabeticalAppsList builds its items once per model change (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/AlphabeticalAppsList.java).
      */
     fun refresh() {
+        // A TRANSITION whose answer never came (a credential prompt that was cancelled sends no event) ends with the panels at rest.
+        _state.update { it.copy(profileStates = userProfileManager.reset(mProfiles, force = true)) }
         scope.launch { readUsage() }
         readMarks()
     }

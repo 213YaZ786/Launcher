@@ -122,6 +122,72 @@ object Profiles {
 }
 
 /**
+ * The state of the work profile and of the private space, one per profile (the key is its serial). UserProfileManager keeps one
+ * mCurrentState for the profile type it manages: STATE_UNKNOWN before the first reset, STATE_ENABLED running or unlocked, STATE_DISABLED paused or
+ * locked, STATE_TRANSITION from the tap on its tile until Android's answer arrives
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/UserProfileManager.java#STATE_TRANSITION).
+ * The tap sets the TRANSITION ([setCurrentState], WorkProfileManager.setWorkProfileEnabled's updateCurrentState); [reset] reads the quiet state
+ * again after a profile reload, as PrivateProfileManager.reset does: previousState, `isEnabled = !hasModelFlag(QUIET_MODE_ENABLED)`, updatedState
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateProfileManager.java#reset).
+ * Calls come from the main thread and the model's, hence @Synchronized.
+ */
+class UserProfileManager {
+
+    companion object {
+        const val STATE_UNKNOWN = 0
+        const val STATE_ENABLED = 1
+        const val STATE_DISABLED = 2
+        const val STATE_TRANSITION = 3
+
+        // UserProfileManager.getCurrentState for a tile: the manager's state, or, while it is STATE_UNKNOWN (no reset yet, a fixed state in a test),
+        // what the first reset sets, `isEnabled = !hasModelFlag(QUIET_MODE_ENABLED)` (PrivateProfileManager.reset)
+        // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/UserProfileManager.java#getCurrentState).
+        fun getCurrentState(profile: ProfileInfo, states: Map<Long, Int>): Int {
+            val currentState = states[profile.serial] ?: STATE_UNKNOWN
+            if (currentState != STATE_UNKNOWN) return currentState
+            return if (!profile.quiet) STATE_ENABLED else STATE_DISABLED
+        }
+    }
+
+    private var mCurrentState = emptyMap<Long, Int>()
+
+    /** The quiet flag each profile had when its TRANSITION began: the TRANSITION ends when the flag differs (the quiet state arrived). */
+    private var mQuietMode = emptyMap<Long, Boolean>()
+
+    /** Sets current state for the profile. Answers every profile's state. */
+    @Synchronized
+    fun setCurrentState(profile: ProfileInfo, state: Int): Map<Long, Int> {
+        mCurrentState = mCurrentState + (profile.serial to state)
+        mQuietMode = mQuietMode + (profile.serial to profile.quiet)
+        return mCurrentState
+    }
+
+    /** Returns current state for the profile. */
+    @Synchronized
+    fun getCurrentState(serial: Long): Int = mCurrentState[serial] ?: STATE_UNKNOWN
+
+    /** Returns if user profile is enabled. */
+    fun isEnabled(serial: Long): Boolean = getCurrentState(serial) == STATE_ENABLED
+
+    /**
+     * Resets the current state of the work profile and the private space from the new load. A TRANSITION stays while the profile's quiet flag is
+     * still the one the tap started from, unless [force] (Android refused, or the panels are back at rest: a credential prompt that was
+     * cancelled sends no event). Answers every profile's state.
+     */
+    @Synchronized
+    fun reset(profiles: List<ProfileInfo>, force: Boolean = false): Map<Long, Int> {
+        mCurrentState = profiles.filter { it.kind == ProfileKind.WORK || it.kind == ProfileKind.PRIVATE }.associate { profile ->
+            val previousState = getCurrentState(profile.serial)
+            val isEnabled = !profile.quiet
+            val updatedState = if (isEnabled) STATE_ENABLED else STATE_DISABLED
+            val transitioning = previousState == STATE_TRANSITION && mQuietMode[profile.serial] == profile.quiet
+            profile.serial to if (transitioning && !force) STATE_TRANSITION else updatedState
+        }
+        return mCurrentState
+    }
+}
+
+/**
  * Tells when a profile is added, removed, paused or locked, from the start to the stop of the screen only (nothing
  * listens in the background). After UserCache's receiver
  * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/pm/UserCache.java):

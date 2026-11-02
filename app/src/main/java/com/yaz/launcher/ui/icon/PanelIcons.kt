@@ -57,6 +57,17 @@ object PanelIcons {
         )
     }
 
+    /**
+     * The Install apps cell of the unlocked private space. Material Symbols "add", rounded, filled, 400 weight, Apache License 2.0
+     * (https://github.com/marella/material-symbols/blob/main/svg/400/rounded/add-fill.svg).
+     */
+    val Add: ImageVector by lazy {
+        buildSymbol(
+            "Add",
+            "M450-450H230q-12.75 0-21.37-8.68-8.63-8.67-8.63-21.5 0-12.82 8.63-21.32 8.62-8.5 21.37-8.5h220v-220q0-12.75 8.68-21.38 8.67-8.62 21.5-8.62 12.82 0 21.32 8.62 8.5 8.63 8.5 21.38v220h220q12.75 0 21.38 8.68 8.62 8.67 8.62 21.5 0 12.82-8.62 21.32-8.63 8.5-21.38 8.5H510v220q0 12.75-8.68 21.37-8.67 8.63-21.5 8.63-12.82 0-21.32-8.63-8.5-8.62-8.5-21.37v-220Z"
+        )
+    }
+
     // Work and Work off: Material Icons Round (filled, 24dp grid), Apache License 2.0, the same family as the Material Symbols above; Symbols has no
     // work_off (https://github.com/google/material-design-icons, src/action/work/materialiconsround/24px.svg and src/action/work_off/materialiconsround/24px.svg).
 

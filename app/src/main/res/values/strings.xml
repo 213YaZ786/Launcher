@@ -18,6 +18,10 @@
     <string name="apps_lock">Lock</string>
     <string name="apps_unlock">Unlock</string>
     <string name="apps_settings">Settings</string>
+    <!-- Trebuchet's strings of the same names: the work card while paused, the private space's settings and install cells -->
+    <string name="work_apps_paused_title">Work apps are paused</string>
+    <string name="ps_container_settings">Private space settings</string>
+    <string name="ps_add_button_label">Install apps</string>
 
     <!-- The apps panel -->
     <string name="menu_app_info">App info</string>

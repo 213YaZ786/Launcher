@@ -10,7 +10,16 @@ package com.yaz.launcher.feature.home
 // the app's shortcuts (Trebuchet's PopupPopulator, at most four), Activities (sdex/ActivityManager), App info, Hide (Trebuchet's hidden apps,
 // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/lineage/trust/HiddenAppsFilter.java) and Uninstall.
 import android.content.pm.ShortcutInfo
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.lazy.grid.LazyGridItemScope
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.yaz.launcher.data.apps.UserProfileManager
+import com.yaz.launcher.data.apps.WorkProfileManager
+import com.yaz.launcher.ui.component.LinearWavyProgress
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,6 +88,25 @@ import kotlinx.coroutines.launch
 
 private const val COLUMNS = 3
 
+// The private space's lock and unlock animation. PrivateProfileManager's constants: the collapse and the expansion take EXPAND_COLLAPSE_DURATION, the
+// private apps fade over APP_OPACITY_DURATION, starting APP_OPACITY_DELAY after the unlock tap (NO_DELAY when they fade out)
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateProfileManager.java#EXPAND_COLLAPSE_DURATION).
+private const val EXPAND_COLLAPSE_DURATION = 400
+private const val APP_OPACITY_DURATION = 400
+private const val APP_OPACITY_DELAY = 400
+private const val NO_DELAY = 0
+
+// animateAlphaOfIcons: the alpha of the private items goes 0 to 1 when expanding and 1 to 0 when collapsing, Interpolators.LINEAR, after which the
+// collapse (animateCollapseAnimation) takes the items out of the list and the cells after them slide into the place, EXPAND_COLLAPSE_DURATION long.
+// Compose's LazyGrid item animations are that: fadeInSpec, fadeOutSpec and placementSpec of Modifier.animateItem
+// (https://developer.android.com/develop/ui/compose/lists#item-animations).
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateProfileManager.java#animateAlphaOfIcons).
+private fun LazyGridItemScope.animateAlphaOfIcons(): Modifier = Modifier.animateItem(
+    fadeInSpec = tween(durationMillis = APP_OPACITY_DURATION, delayMillis = APP_OPACITY_DELAY, easing = LinearEasing),
+    fadeOutSpec = tween(durationMillis = APP_OPACITY_DURATION, delayMillis = NO_DELAY, easing = LinearEasing),
+    placementSpec = tween(durationMillis = EXPAND_COLLAPSE_DURATION)
+)
+
 /**
  * The panel: the grid laid straight on the scrim, as the Quick Settings shade lays its tiles (no pane), its alpha the shade's content alpha
  * of [progress], the panel's own opening 0 to 1 (SystemUI's ShadeInterpolation.getContentAlpha, ui/component/ShadeInterpolation.kt). [grid] is
@@ -123,15 +151,51 @@ fun AppsPanel(
             val rows = (usable / rowHeight).toInt().coerceAtLeast(1)
             // The work profile and the private space, each with its apps (an empty one still shows its title and button).
             val profiles = state.profiles.filter { it.kind == ProfileKind.WORK || it.kind == ProfileKind.PRIVATE }
-            val others = profiles.map { profile -> state.others.filter { it.userSerial == profile.serial } }
+            // WorkProfileManager.shouldShowWorkApps: the work apps of a profile in STATE_DISABLED are not listed (addWorkItems adds the disabled card
+            // instead: the tile says so, see ProfileCell). The private space keeps its own rule, its apps leave the model's list while it is locked.
+            // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/WorkProfileManager.java#shouldShowWorkApps)
+            val currentStates = profiles.map { UserProfileManager.getCurrentState(it, state.profileStates) }
+            val others = profiles.mapIndexed { b, profile ->
+                val showApps = profile.kind != ProfileKind.WORK || WorkProfileManager.shouldShowWorkApps(currentStates[b])
+                state.others.filter { showApps && it.userSerial == profile.serial }
+            }
+            // PrivateProfileManager.updateView, case STATE_ENABLED: the settings gear is visible when isPrivateSpaceSettingsAvailable; and
+            // AlphabeticalAppsList.addPrivateSpaceApps adds addPrivateSpaceInstallAppButton in that state only.
+            // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateProfileManager.java#updateView)
+            val isEnabled = profiles.mapIndexed { b, profile -> profile.kind == ProfileKind.PRIVATE && currentStates[b] == UserProfileManager.STATE_ENABLED }
+            val settings = isEnabled.map { it && state.privateSpaceSettingsAvailable }
+            val install = isEnabled.map { it && state.privateSpaceInstallAvailable }
             val placed = pinned.size + state.apps.size
+            // At least two rows, so a title and its button fit in a short list. The empty cells that start each block in a new column
+            // are not counted: they only fill what is left of a column.
+            val count = placed + profiles.indices.sumOf { 1 + others[it].size + listOf(settings[it], install[it]).count { added -> added } }
+            val shownRows = count.coerceIn(minOf(2, rows), rows)
+            val blocks = profileBlocks(placed, if (edge == Panel.BOTTOM) columns else shownRows, others, settings, install)
+
+            // PrivateProfileManager.reset: `previousState == STATE_DISABLED && updatedState == STATE_ENABLED` is postUnlock, which runs
+            // expandPrivateSpace: scrollForHeaderToBeVisibleInContainer scrolls to the itemToScrollTo that shows the header (here the private
+            // tile; the apps fade in by animateAlphaOfIcons). A STATE_TRANSITION between is not a state: a refused lock goes ENABLED, TRANSITION,
+            // ENABLED and unlocks nothing.
+            // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateProfileManager.java#expandPrivateSpace)
+            val itemToScrollTo = profiles.indexOfFirst { it.kind == ProfileKind.PRIVATE }
+            val updatedState = if (itemToScrollTo >= 0) currentStates[itemToScrollTo] else UserProfileManager.STATE_UNKNOWN
+            var previousState by remember { mutableIntStateOf(UserProfileManager.STATE_UNKNOWN) }
+            LaunchedEffect(updatedState) {
+                if (updatedState != UserProfileManager.STATE_TRANSITION) {
+                    if (previousState == UserProfileManager.STATE_DISABLED && updatedState == UserProfileManager.STATE_ENABLED) {
+                        // The index of the tile: the cells before it, each earlier block whole, and the empty cells that start its own.
+                        val tileIndex = blocks.take(itemToScrollTo).fold(placed) { index, block -> index + block.padding + 1 + block.apps.size + block.extra }
+                        grid.animateScrollToItem(tileIndex + blocks[itemToScrollTo].padding)
+                    }
+                    previousState = updatedState
+                }
+            }
 
             if (edge == Panel.BOTTOM) {
                 // From the bottom the list goes up and down, as the Pixel Launcher's and Trebuchet's drawer: Compose's LazyVerticalGrid
                 // (https://developer.android.com/develop/ui/compose/lists, "Lazy grids"), a profile starting a new row (the rest of the
                 // row before it is empty cells), the Settings row the last item over the whole width. The panel closes by a drag down
                 // once the grid is at its top (the [close] connection).
-                val blocks = profileBlocks(placed, columns, others)
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
                     state = grid,
@@ -146,15 +210,9 @@ fun AppsPanel(
                             else (grid.firstVisibleItemScrollOffset / with(density) { 16.dp.toPx() }).coerceIn(0f, 1f)
                         }
                 ) {
-                    appCells(pinned, state, profiles, blocks, columnWidth, iconSize, actions, seen)
+                    appCells(pinned, state, profiles, currentStates, blocks, columnWidth, iconSize, actions, seen)
                 }
             } else {
-                // At least two rows, so a title and its button fit in a short list. The empty cells that start each block in a new column
-                // are not counted: they only fill what is left of a column.
-                val count = placed + profiles.indices.sumOf { 1 + others[it].size }
-                val shownRows = count.coerceIn(minOf(2, rows), rows)
-                val blocks = profileBlocks(placed, shownRows, others)
-
                 // The block of rows is centred in the pane; the grid is as tall as its rows, so each track is one row high. The panel on the
                 // left is the right one mirrored (reverseLayout, https://developer.android.com/develop/ui/compose/lists): its first apps sit
                 // at its right, next to the screen, and a swipe right brings the next columns.
@@ -165,7 +223,7 @@ fun AppsPanel(
                         reverseLayout = edge == Panel.LEFT,
                         modifier = Modifier.fillMaxWidth().height(rowHeight * shownRows)
                     ) {
-                        appCells(pinned, state, profiles, blocks, columnWidth, iconSize, actions, seen)
+                        appCells(pinned, state, profiles, currentStates, blocks, columnWidth, iconSize, actions, seen)
                     }
                 }
             }
@@ -180,6 +238,7 @@ private fun LazyGridScope.appCells(
     pinned: List<PinnedRow>,
     state: LauncherState,
     profiles: List<ProfileInfo>,
+    currentStates: List<Int>,
     blocks: List<ProfileBlock<AppEntry>>,
     columnWidth: Dp,
     iconSize: Dp,
@@ -197,10 +256,28 @@ private fun LazyGridScope.appCells(
             Spacer(Modifier.width(columnWidth))
         }
         item(key = "profile/" + profile.serial) {
-            ProfileCell(profile, iconSize, actions, seen, Modifier.width(columnWidth))
+            ProfileCell(profile, currentStates[b], iconSize, actions, seen, Modifier.width(columnWidth))
+        }
+        // PrivateProfileManager.updateView: the private space's header holds the settings gear next to the lock (PrivateSpaceSettingsButton).
+        if (blocks[b].settings) {
+            item(key = "ps-settings/" + profile.serial) {
+                ProfileCell(
+                    profile, currentStates[b], iconSize, actions, seen, Modifier.width(columnWidth).then(animateAlphaOfIcons()),
+                    beside = AppIcons.Settings, besideLabel = stringResource(R.string.ps_container_settings), onBesideClick = actions.openPrivateSpaceSettings
+                )
+            }
         }
         itemsIndexed(blocks[b].apps, key = { _, entry -> entry.listKey() }) { index, entry ->
-            AppCell(entry, iconSize, actions, seen, index, Modifier.width(columnWidth))
+            AppCell(entry, iconSize, actions, seen, index, Modifier.width(columnWidth).then(animateAlphaOfIcons()))
+        }
+        // PrivateProfileManager.addPrivateSpaceInstallAppButton: the Install apps button after the private apps.
+        if (blocks[b].install) {
+            item(key = "ps-install/" + profile.serial) {
+                ProfileCell(
+                    profile, currentStates[b], iconSize, actions, seen, Modifier.width(columnWidth).then(animateAlphaOfIcons()),
+                    beside = PanelIcons.Add, besideLabel = stringResource(R.string.ps_add_button_label), onBesideClick = { actions.installToPrivateSpace(profile) }
+                )
+            }
         }
     }
 }
@@ -212,11 +289,26 @@ private fun LazyGridScope.appCells(
 // Compared: Trebuchet's private_space_header.xml (a lock pill beside the title) and the Pixel Launcher (the same pill); the tile in the grid is
 // iOS's App Library, where each group is one tile among the others. The cell is AppCell's, the glyph is centred in the pane at 45 % of its size.
 @Composable
-private fun ProfileCell(profile: ProfileInfo, iconSize: Dp, actions: HomeActions, seen: MutableSet<String>, modifier: Modifier = Modifier) {
+private fun ProfileCell(
+    profile: ProfileInfo,
+    currentState: Int,
+    iconSize: Dp,
+    actions: HomeActions,
+    seen: MutableSet<String>,
+    modifier: Modifier = Modifier,
+    // The cells beside the private space's tile (the settings gear, the Install apps button) are drawn the same way: their own glyph, label and tap.
+    beside: ImageVector? = null,
+    besideLabel: String = "",
+    onBesideClick: () -> Unit = {}
+) {
     val work = profile.kind == ProfileKind.WORK
-    val title = stringResource(if (work) R.string.apps_work else R.string.apps_private)
+    // WorkProfileManager.addWorkItems: in STATE_DISABLED the work apps are replaced by the disabled card, whose title is work_apps_paused_title; here
+    // the work tile is that card: its label says the work apps are paused, Resume is its action.
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/WorkProfileManager.java#addWorkItems)
+    val paused = work && WorkProfileManager.addWorkItems(currentState)
+    val title = beside?.let { besideLabel } ?: stringResource(if (paused) R.string.work_apps_paused_title else if (work) R.string.apps_work else R.string.apps_private)
     // The label says the action a tap does.
-    val action = stringResource(
+    val action = if (beside != null) besideLabel else stringResource(
         when {
             work && profile.quiet -> R.string.apps_resume
             work -> R.string.apps_pause
@@ -224,8 +316,12 @@ private fun ProfileCell(profile: ProfileInfo, iconSize: Dp, actions: HomeActions
             else -> R.string.apps_lock
         }
     )
-    // The glyph shows the state: the private space locked or open, the work apps paused or running.
+    // The glyph shows the state: the private space locked or open, the work apps paused or running. In STATE_TRANSITION there is none: the progress
+    // indicator is drawn in its place, as PrivateProfileManager.updateView hides the lock pill and shows the transition view
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateProfileManager.java#updateView).
     val glyph = when {
+        beside != null -> beside
+        currentState == UserProfileManager.STATE_TRANSITION -> null
         work && profile.quiet -> PanelIcons.WorkOff
         work -> PanelIcons.Work
         profile.quiet -> PanelIcons.Lock
@@ -238,12 +334,16 @@ private fun ProfileCell(profile: ProfileInfo, iconSize: Dp, actions: HomeActions
     // https://github.com/LineageOS/android_frameworks_libs_systemui/blob/lineage-22.2/iconloaderlib/src/com/android/launcher3/icons/mono/ThemedIconDrawable.kt).
     val ground = if (style.themed) MaterialTheme.colorScheme.primaryContainer else null
     val glyphTint = if (style.themed) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
-    Box(modifier.entrancePop(seen, "profile/" + profile.serial, 0)) {
+    Box(modifier.entrancePop(seen, (if (beside != null) "ps/" + besideLabel + "/" else "profile/") + profile.serial, 0)) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .fillMaxWidth()
-                .sinkClickable(action, onClick = { actions.setQuiet(profile, !profile.quiet) })
+                // While in STATE_TRANSITION a tap does nothing.
+                .sinkClickable(action, onClick = {
+                    if (beside != null) onBesideClick()
+                    else if (currentState != UserProfileManager.STATE_TRANSITION) actions.setQuiet(profile, !profile.quiet)
+                })
                 .padding(horizontal = 2.dp, vertical = CELL_PAD)
         ) {
             Box(Modifier.size(iconSize), contentAlignment = Alignment.Center) {
@@ -252,7 +352,11 @@ private fun ProfileCell(profile: ProfileInfo, iconSize: Dp, actions: HomeActions
                 } else {
                     ZoneSurface(shape = shape, modifier = Modifier.size(iconSize)) { }
                 }
-                Icon(glyph, contentDescription = null, tint = glyphTint, modifier = Modifier.size(iconSize * 0.45f))
+                if (glyph != null) {
+                    Icon(glyph, contentDescription = null, tint = glyphTint, modifier = Modifier.size(iconSize * 0.45f))
+                } else {
+                    LinearWavyProgress(Modifier.width(iconSize * 0.5f), color = glyphTint, trackColor = glyphTint.copy(alpha = 0.25f))
+                }
             }
             CellLabel(title)
         }
@@ -262,19 +366,30 @@ private fun ProfileCell(profile: ProfileInfo, iconSize: Dp, actions: HomeActions
 // A profile's block of the grid: the empty cells that fill the column before it, and its apps. Trebuchet's AlphabeticalAppsList puts the
 // private space's header as one item of the list, before its apps, after the others
 // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/AlphabeticalAppsList.java).
-internal class ProfileBlock<T>(val padding: Int, val apps: List<T>)
+// The unlocked private space adds a settings cell before its apps and an Install apps cell after them (PrivateProfileManager.updateView,
+// addPrivateSpaceInstallAppButton): [settings] and [install] say so, [extra] counts them.
+internal class ProfileBlock<T>(val padding: Int, val apps: List<T>, val settings: Boolean = false, val install: Boolean = false) {
+    val extra: Int get() = (if (settings) 1 else 0) + (if (install) 1 else 0)
+}
 
 // The blocks of the work profile and the private space, each starting at the first row of a new column: [placed] cells come before the first,
 // the column is [rows] cells high, and what is left of the current column ((rows - placed % rows) % rows cells) is filled with empty cells;
 // the block is then its header (one cell) and its apps, the next one counting from there. [apps] is the list of each profile's apps.
 // Trebuchet's list order (the profiles' apps after the others, AlphabeticalAppsList) in Compose's LazyHorizontalGrid, which fills a column
 // top to bottom then the next (https://developer.android.com/develop/ui/compose/lists, "Lazy grids"); the padding is this app's.
-internal fun <T> profileBlocks(placed: Int, rows: Int, apps: List<List<T>>): List<ProfileBlock<T>> {
+internal fun <T> profileBlocks(
+    placed: Int,
+    rows: Int,
+    apps: List<List<T>>,
+    settings: List<Boolean> = emptyList(),
+    install: List<Boolean> = emptyList()
+): List<ProfileBlock<T>> {
     var used = placed
-    return apps.map { own ->
+    return apps.mapIndexed { b, own ->
         val padding = (rows - used % rows) % rows
-        used += padding + 1 + own.size
-        ProfileBlock(padding, own)
+        val block = ProfileBlock(padding, own, settings.getOrElse(b) { false }, install.getOrElse(b) { false })
+        used += padding + 1 + own.size + block.extra
+        block
     }
 }
 

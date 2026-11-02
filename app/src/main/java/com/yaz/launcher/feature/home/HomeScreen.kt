@@ -154,6 +154,7 @@ fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSigna
     val settings by store.settings.collectAsState()
     val context = LocalContext.current
     val haptics = rememberHaptics()
+    val scope = rememberCoroutineScope()
     // The guide, at the first start; again from Settings, About (its own route).
     if (!settings.setupDone) {
         GuideScreen(onFinish = {})
@@ -188,8 +189,17 @@ fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSigna
             openSettings = onSettings,
             // Trebuchet's OptionsPopupView.startWallpaperPicker: not started when the user may not set a wallpaper (a reject haptic stands for its toast).
             openWallpaper = { if (!AppActions.openWallpaper(context)) haptics.reject() },
-            // Trebuchet's UserProfileManager.setQuietModeSafely: only the default home app may pause or lock a profile.
-            setQuiet = { profile, quiet -> if (!AppActions.setQuietMode(context, profile.user, quiet)) haptics.reject() },
+            // Trebuchet's WorkProfileManager.setWorkProfileEnabled and UserProfileManager.setQuietModeSafely: the tile goes to STATE_TRANSITION, then
+            // quiet mode is asked; only the default home app may pause or lock a profile (a SecurityException asks for the home role, from the activity).
+            setQuiet = { profile, quiet ->
+                scope.launch {
+                    val accepted = model.setWorkProfileEnabled(profile, enabled = !quiet, context = context.findActivity() ?: context)
+                    if (accepted != true) haptics.reject()
+                }
+            },
+            // PrivateSpaceSettingsButton.onClick and the Install apps button: an intent sender started from the activity.
+            openPrivateSpaceSettings = { if (!AppActions.onClickPrivateSpaceSettings(context.findActivity() ?: context)) haptics.reject() },
+            installToPrivateSpace = { profile -> if (!AppActions.onClickPrivateSpaceInstall(context.findActivity() ?: context, profile.user)) haptics.reject() },
             refresh = model::refresh,
             hide = { entry -> model.hide(entry.packageName) },
             openActivities = { entry -> onActivities(entry.packageName) },

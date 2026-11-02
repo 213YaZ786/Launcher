@@ -2,14 +2,17 @@ package com.yaz.launcher.data.apps
 
 import android.app.ActivityOptions
 import android.app.WallpaperManager
+import android.app.role.RoleManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentSender
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.graphics.Rect
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.UserHandle
 import android.os.UserManager
@@ -121,13 +124,96 @@ object AppActions {
 
     /**
      * Pauses (work profile) or locks (private space) a profile, or brings it back: UserManager.requestQuietModeEnabled, which only the
-     * default home app may call, as Trebuchet's UserProfileManager.setQuietModeSafely calls it (a SecurityException means this app is not
-     * the home app)
-     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/UserProfileManager.java;
-     * WorkProfileManager.setWorkProfileEnabled and PrivateProfileManager.setQuietMode call it). Answers whether Android accepted.
+     * default home app may call. UserProfileManager.setQuietModeSafely: on a SecurityException (this app is not the home app) it asks for the
+     * home role ([assignDefaultHomeRole]). The answer tells the cases apart (Trebuchet's method returns nothing): true when Android took the
+     * request, false when it refused (requestQuietModeEnabled answers false when a credential is needed first), null on the SecurityException
+     * (not the home app).
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/UserProfileManager.java#setQuietModeSafely).
+     * Blocking: the caller runs it off the main thread, where Trebuchet posts it to UI_HELPER_EXECUTOR.
      */
-    fun setQuietMode(context: Context, user: UserHandle, quiet: Boolean): Boolean = guarded {
-        context.getSystemService(UserManager::class.java).requestQuietModeEnabled(quiet, user)
+    fun setQuietModeSafely(context: Context, userHandle: UserHandle, enable: Boolean): Boolean? = try {
+        context.getSystemService(UserManager::class.java).requestQuietModeEnabled(enable, userHandle)
+    } catch (_: SecurityException) {
+        assignDefaultHomeRole(context)
+        null
+    } catch (_: IllegalStateException) {
+        false
+    } catch (_: NullPointerException) {
+        false
+    }
+
+    /**
+     * Starts the consent screen that makes this launcher the home app: when the role is available and not held, RoleManager.createRequestRoleIntent
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/quickstep/src/com/android/launcher3/uioverrides/SystemApiWrapper.kt#assignDefaultHomeRole).
+     * Trebuchet starts it through its ProxyActivityStarter and shows the toast set_default_home_app when the user refuses: both left out here,
+     * [context] is the activity and starts it itself.
+     */
+    fun assignDefaultHomeRole(context: Context) {
+        val roleManager = context.getSystemService(RoleManager::class.java)
+        if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_HOME) && !roleManager.isRoleHeld(RoleManager.ROLE_HOME)) {
+            val roleRequestIntent = roleManager.createRequestRoleIntent(RoleManager.ROLE_HOME)
+            runCatching { context.startActivity(roleRequestIntent) }
+        }
+    }
+
+    /**
+     * The intent sender that opens the private space's settings: LauncherApps.getPrivateSpaceSettingsIntent, null when there is none
+     * (Android before 15, or no private space)
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/quickstep/src/com/android/launcher3/uioverrides/SystemApiWrapper.kt#getPrivateSpaceSettingsIntent).
+     * Trebuchet wraps it in a ProxyActivityStarter intent and tests the allowPrivateProfile and enablePrivateSpace flags: the call itself
+     * answers null (or refuses) without them.
+     */
+    fun getPrivateSpaceSettingsIntent(context: Context): IntentSender? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return null
+        return runCatching { context.getSystemService(LauncherApps::class.java)?.privateSpaceSettingsIntent }.getOrNull()
+    }
+
+    /**
+     * The intent sender that opens the app market in the private space [user]: LauncherApps.getAppMarketActivityIntent, null when there is none
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/quickstep/src/com/android/launcher3/uioverrides/SystemApiWrapper.kt#getAppMarketActivityIntent).
+     * PrivateProfileManager.initializeInBackgroundThread asks it with BuildConfig.APPLICATION_ID, the launcher's own package.
+     */
+    fun getAppMarketActivityIntent(context: Context, packageName: String, user: UserHandle): IntentSender? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return null
+        return runCatching { context.getSystemService(LauncherApps::class.java)?.getAppMarketActivityIntent(packageName, user) }.getOrNull()
+    }
+
+    /**
+     * What a tap on the private space's settings gear does: PrivateSpaceSettingsButton.onClick starts the settings intent through
+     * startActivitySafely (the ProxyActivityStarter); here the intent sender is started with the options Trebuchet puts in its StartActivityParams,
+     * ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(MODE_BACKGROUND_ACTIVITY_START_ALLOWED), from the activity [context]
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateSpaceSettingsButton.java#onClick).
+     * Answers whether Android accepted; false too when there is no settings intent.
+     */
+    fun onClickPrivateSpaceSettings(context: Context): Boolean {
+        val sender = getPrivateSpaceSettingsIntent(context) ?: return false
+        return startIntentSender(context, sender)
+    }
+
+    /**
+     * The Install apps cell: the app market's intent sender of the private space [user], started as [onClickPrivateSpaceSettings] starts the gear's
+     * (PrivateProfileManager.addPrivateSpaceInstallAppButton gives the button the intent of getAppMarketActivityIntent,
+     * https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/PrivateProfileManager.java#addPrivateSpaceInstallAppButton).
+     */
+    fun onClickPrivateSpaceInstall(context: Context, user: UserHandle): Boolean {
+        val sender = getAppMarketActivityIntent(context, context.packageName, user) ?: return false
+        return startIntentSender(context, sender)
+    }
+
+    // SystemApiWrapper's StartActivityParams: no result wanted (requireActivityResult = false), the options that let the sender start in the background.
+    private fun startIntentSender(context: Context, sender: IntentSender): Boolean = try {
+        val options = ActivityOptions.makeBasic()
+            .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+        context.startIntentSender(sender, null, 0, 0, 0, options.toBundle())
+        true
+    } catch (_: IntentSender.SendIntentException) {
+        false
+    } catch (_: SecurityException) {
+        false
+    } catch (_: IllegalStateException) {
+        false
+    } catch (_: ActivityNotFoundException) {
+        false
     }
 
     /**
