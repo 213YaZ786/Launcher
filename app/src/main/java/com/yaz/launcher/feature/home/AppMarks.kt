@@ -8,6 +8,13 @@ package com.yaz.launcher.feature.home
 //   (YAZ/Store at HEAD, feature/home/HomeUpdates.kt, colorScheme.error).
 import android.graphics.Color as NativeColor
 import android.graphics.Paint as NativePaint
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.drawscope.scale
+import kotlin.math.cos
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.drawBehind
@@ -55,6 +62,30 @@ data class AppMarks(val dots: Set<DotKey> = emptySet(), val updates: Set<String>
 
 val LocalAppMarks = compositionLocalOf { AppMarks() }
 
+// AccelerateDecelerateInterpolator.getInterpolation, ObjectAnimator's default interpolator
+// (https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/view/animation/AccelerateDecelerateInterpolator.java#getInterpolation).
+private val AccelerateDecelerateInterpolator = Easing { input -> (cos((input + 1) * Math.PI) / 2.0f).toFloat() + 0.5f }
+
+/**
+ * BubbleTextView.applyDotState and animateDotScale: the dot's scale (mDotParams.scale, the DOT_SCALE_PROPERTY) is 1 with a dot and 0 without.
+ * When a dot is first added or removed on an icon that is shown (`animate && (wasDotted ^ isDotted) && isShown()`), `animateDotScale(newDotScale)`
+ * runs the scale to the new value with an ObjectAnimator (its default duration, 300 ms, and AccelerateDecelerate); a running one is cancelled first
+ * (cancelDotScaleAnim, here the LaunchedEffect's restart). Otherwise (the icon's first composition) the scale is set at once:
+ * `mDotParams.scale = newDotScale`. The scale is read in the draw phase.
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/BubbleTextView.java#applyDotState,
+ * https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/BubbleTextView.java#animateDotScale)
+ */
+@Composable
+fun applyDotState(isDotted: Boolean): Animatable<Float, AnimationVector1D> {
+    val newDotScale = if (isDotted) 1f else 0f
+    val mDotParams = remember { Animatable(newDotScale) }
+    LaunchedEffect(isDotted) {
+        // wasDotted ^ isDotted: the scale is not yet where the dot now puts it (a run cut short by the effect's restart counts as well).
+        if (mDotParams.value != newDotScale) mDotParams.animateTo(newDotScale, tween(300, easing = AccelerateDecelerateInterpolator))
+    }
+    return mDotParams
+}
+
 // DotRenderer's SIZE_PERCENTAGE: the dot is 22.8 % of the icon.
 // https://github.com/LineageOS/android_frameworks_libs_systemui/blob/lineage-22.2/iconloaderlib/src/com/android/launcher3/icons/DotRenderer.java
 private const val DOT_SIZE = 0.228f
@@ -64,7 +95,7 @@ private const val DOT_SIZE = 0.228f
  * icon's bounds (the offsetX and offsetY clamps against the canvas bounds), then the circle. The ring under it is the surface colour.
  */
 @Composable
-fun NotificationDot(shape: Shape, size: Dp, modifier: Modifier = Modifier) {
+fun NotificationDot(shape: Shape, size: Dp, modifier: Modifier = Modifier, dotScale: () -> Float = { 1f }) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
     val px = with(density) { size.toPx() }
@@ -79,8 +110,11 @@ fun NotificationDot(shape: Shape, size: Dp, modifier: Modifier = Modifier) {
         val outer = radius + ring
         val x = if (rtl) maxOf(centre.x, outer) else minOf(centre.x, this.size.width - outer)
         val y = maxOf(centre.y, outer)
-        drawCircle(ringColor, outer, Offset(x, y))
-        drawCircle(dotColor, radius, Offset(x, y))
+        // DotRenderer.draw scales the canvas by the dot's scale about the dot's centre.
+        scale(dotScale(), Offset(x, y)) {
+            drawCircle(ringColor, outer, Offset(x, y))
+            drawCircle(dotColor, radius, Offset(x, y))
+        }
     }
 }
 

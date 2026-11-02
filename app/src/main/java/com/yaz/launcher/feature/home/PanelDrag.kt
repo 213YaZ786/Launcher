@@ -26,6 +26,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.unit.Velocity
@@ -225,6 +229,48 @@ internal fun Modifier.singleAxisSwipeGate(active: () -> Boolean): Modifier = poi
                 }
             }
         } while (change.pressed)
+    }
+}
+
+/**
+ * Decides once per gesture, at its down, which axes the panels' drags may take, as Trebuchet's AbstractStateChangeTouchController does:
+ * at ACTION_DOWN `mNoIntercept = !canInterceptTouch(ev)`, then `getSwipeDirection()` gives the directions the detector will detect, and the
+ * detector is never switched on or off in the middle of a gesture. Here the draggables keep their `enabled` to the panels' state, so no
+ * recomposition has to catch up with a down already dispatched; along an axis [canInterceptTouch] refuses, the moves are consumed on the Initial
+ * pass once they pass the touch slop (the way [singleAxisSwipeGate] consumes), so no draggable has them. [canInterceptTouch] gets the place of
+ * the down, the size of the box and the axis. AllAppsSwipeController.canInterceptTouch is its model. The pointer events are read as
+ * Compose's drag detector does (awaitTouchSlopOrCancellation).
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/AbstractStateChangeTouchController.java#onControllerInterceptTouchEvent,
+ * https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/AllAppsSwipeController.java#canInterceptTouch,
+ * https://github.com/androidx/androidx/blob/androidx-main/compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/DragGestureDetector.kt#awaitTouchSlopOrCancellation)
+ */
+@Composable
+internal fun Modifier.onControllerInterceptTouchEvent(canInterceptTouch: (ev: Offset, size: IntSize, mDir: Direction) -> Boolean): Modifier {
+    val latest by rememberUpdatedState(canInterceptTouch)
+    return pointerInput(Unit) {
+        val mTouchSlop = viewConfiguration.touchSlop
+        awaitEachGesture {
+            val ev = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            val mDownPos = ev.position
+            // getSwipeDirection: the directions the controller will detect on an axis, none when canInterceptTouch refuses it.
+            fun getSwipeDirection(mDir: Direction): Int = if (latest(mDownPos, size, mDir)) DIRECTION_BOTH else 0
+            var isDraggingOrSettling = false
+            do {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == ev.id } ?: break
+                if (!isDraggingOrSettling && event.changes.size == 1) {
+                    val mDisplacement = change.position - mDownPos
+                    val angle = atan2(abs(mDisplacement.y), abs(mDisplacement.x)) * (180f / PI.toFloat())
+                    val mDir = if (angle <= HORIZONTAL_ANGLE_UPPER_BOUNDS) Direction.HORIZONTAL else Direction.VERTICAL
+                    val directionsToDetectScroll = getSwipeDirection(mDir)
+                    if (directionsToDetectScroll == 0) {
+                        if (abs(mDir.extractDirection(mDisplacement)) > mTouchSlop) change.consume()
+                    } else if (shouldScrollStart(mDir, mDisplacement, mTouchSlop, directionsToDetectScroll)) {
+                        isDraggingOrSettling = true
+                    }
+                }
+            } while (change.pressed)
+        }
     }
 }
 

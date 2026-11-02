@@ -355,10 +355,8 @@ fun HomeContent(
     var workScroll by remember { mutableIntStateOf(0) }
     // The header's measured height in px: the side panels and the Apps panel at the bottom start under it.
     var headerPx by remember { mutableIntStateOf(0) }
-    // Read when a finger goes down (see onGestureDown below): it went down outside the system's gesture band, and the Apps grids were at the
-    // edge the panel closes towards.
-    var sheetStartOk by remember { mutableStateOf(true) }
-    var sideStartOk by remember { mutableStateOf(true) }
+    // Read when a finger goes down (see onGestureDown below): the Apps grids were at the edge the panel closes towards. Whether it went down
+    // outside the system's gesture band is not state: onControllerInterceptTouchEvent decides it once per gesture.
     var sheetStartAtTop by remember { mutableStateOf(true) }
     var sideStartAtEdge by remember { mutableStateOf(true) }
     // The apps grid's scroll, kept here: a side Apps panel follows the drag only while the grid is at its start (the right panel's grid runs
@@ -608,22 +606,27 @@ fun HomeContent(
                     },
                     onSwipeDown = actions.openNotifications
                 )
-                // What is decided when a finger goes down, before the drags see it (nothing is consumed): whether it went down in the system's
-                // gesture band, and where the Apps grids were.
+                // What is decided when a finger goes down, before the drags see it: whether it went down in the system's gesture band (refused once
+                // per gesture, as Trebuchet's AbstractStateChangeTouchController does at ACTION_DOWN, mNoIntercept = !canInterceptTouch(ev); the
+                // draggables below keep their `enabled` to the panels' state, so a gesture that follows another at once finds them ready for its
+                // down), and where the Apps grids were (nothing consumed).
                 // A drag along neither axis starts no panel (SingleAxisSwipeDetector.shouldScrollStart), while nothing is open.
                 .singleAxisSwipeGate { side.targetValue == Side.CLOSED && sheet.targetValue == Sheet.CLOSED }
-                .onGestureDown { position, size ->
-                    val bottomEdge = bottomBand.getBottom(density)
-                    sheetStartOk = position.y < size.height - bottomEdge
-                    val leftEdge = gestureInsets.getLeft(density, direction)
-                    val rightEdge = gestureInsets.getRight(density, direction)
-                    sideStartOk = position.x >= leftEdge && position.x <= size.width - rightEdge
+                .onControllerInterceptTouchEvent { position, size, mDir ->
+                    // AllAppsSwipeController.canInterceptTouch: the vertical panel is refused in the bottom band, the horizontal ones in a side band.
+                    when (mDir) {
+                        Direction.VERTICAL -> position.y < size.height - bottomBand.getBottom(density)
+                        Direction.HORIZONTAL ->
+                            position.x >= gestureInsets.getLeft(density, direction) && position.x <= size.width - gestureInsets.getRight(density, direction)
+                    }
+                }
+                .onGestureDown { _, _ ->
                     sheetStartAtTop = bottomGridAtTop
                     sideStartAtEdge = gridAtStart
                 }
                 // A swipe left or right brings in the panel of that edge, a swipe up the bottom one. Only one panel at a time.
-                .anchoredDraggable(side, Orientation.Horizontal, enabled = sheet.targetValue == Sheet.CLOSED && sideDrag && sideStartOk, flingBehavior = sideFling)
-                .anchoredDraggable(sheet, Orientation.Vertical, enabled = side.targetValue == Side.CLOSED && sheetDrag && sheetStartOk, flingBehavior = sheetFling)
+                .anchoredDraggable(side, Orientation.Horizontal, enabled = sheet.targetValue == Sheet.CLOSED && sideDrag, flingBehavior = sideFling)
+                .anchoredDraggable(sheet, Orientation.Vertical, enabled = side.targetValue == Side.CLOSED && sheetDrag, flingBehavior = sheetFling)
         ) {
             // The scrim, over the wallpaper and under the panels, drawn with the progress read in the draw phase; a tap on it closes the open panel.
             // With no panel open it is the wallpaper itself: a long press opens the Wallpaper and Settings menu (Compose's detectTapGestures,

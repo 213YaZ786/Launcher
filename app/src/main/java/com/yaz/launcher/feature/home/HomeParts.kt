@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -107,7 +108,11 @@ fun AppIcon(entry: AppEntry, size: Dp, modifier: Modifier = Modifier) {
             if (badge != null) Image(badge, contentDescription = null, modifier = Modifier.size(size))
         }
         if (marks.update(entry)) UpdateMark(size * 0.36f, Modifier.align(Alignment.BottomStart))
-        if (marks.dot(entry)) NotificationDot(shape, size)
+        // BubbleTextView.applyDotState / animateDotScale (AppMarks.kt): the dot grows in or out; it stays composed while its scale is above 0.
+        val isDotted = marks.dot(entry)
+        val mDotParams = applyDotState(isDotted)
+        val dotShown by remember { derivedStateOf { mDotParams.value > 0f } }
+        if (isDotted || dotShown) NotificationDot(shape, size, dotScale = { mDotParams.value })
     }
 }
 
