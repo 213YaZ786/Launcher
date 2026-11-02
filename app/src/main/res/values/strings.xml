@@ -95,6 +95,12 @@
     <string name="header_mode_dnd">Do not disturb</string>
     <string name="header_missed_calls">Missed calls: %1$d</string>
     <string name="header_unread_sms">Unread messages: %1$d</string>
+    <!-- What a tap on each part of the header does (TalkBack reads "double tap to ...") -->
+    <string name="header_tap_clock">open the clock</string>
+    <string name="header_tap_alarm">open the alarm</string>
+    <string name="header_tap_battery">open battery usage</string>
+    <string name="header_tap_mode">open sound settings</string>
+    <string name="header_tap_date">open the calendar</string>
     <string name="hijri_new_year">Islamic New Year</string>
     <string name="hijri_ashura">Ashura</string>
     <string name="hijri_eid_fitr">Eid al-Fitr</string>

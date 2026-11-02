@@ -681,6 +681,8 @@ fun HomeContent(
                 dateMode = dateMode,
                 onOpen = panelActions.openPackage,
                 onSettings = panelActions.openSettings,
+                // Shut after a launch from the header, as panelActions wraps openPackage and openSettings.
+                onLaunched = { close() },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .onSizeChanged { headerPx = it.height }

@@ -2,11 +2,18 @@ package com.yaz.launcher.feature.home
 
 // The header drawn at the top of the screen while a panel is open or opening, in place of the status bar (the home screen hides it). Rows, each
 // line shown only when it has something:
-// - the time large, the seconds smaller after it (left), the battery (right), centred on the digits' height;
+// - the time large, the seconds smaller after it (left), the phone's mode (icon only, vibrate, silent or Do not disturb, its words as the description)
+//   just before the battery, then the battery (right), all centred on the digits' height, as SystemUI's shade header puts the status icons before the battery;
 // - under the battery, while charging, the time left;
 // - the date lines and the special Hijri day (left), the round glass Settings button (right);
-// - the next alarm (left) and the phone's mode (right);
+// - the next alarm, alone (left);
 // - one row of glass capsules, the missed calls and the unread messages, only when there are some.
+// Taps, as SystemUI's ShadeHeaderController (clock.setOnClickListener { launchClockActivity() }, batteryIcon.setOnClickListener with
+// ACTION_POWER_USAGE_SUMMARY) and Lawnchair's smartspace: the time and the alarm open the next alarm's showIntent, else the clock's alarms
+// (launchClockActivity); the battery and the time left open the battery usage; the mode opens the sound settings (BottomBarViewModel.onSettingsClicked);
+// the date lines open the calendar (BcSmartSpaceUtil.getOpenCalendarIntent). Each is sent as Lawnchair's setOnClickListener does (an Intent through
+// startActivity, a PendingIntent through send with allowBGLaunch's options), inside runCatching. An Intent no activity answers (checked when the header
+// appears) leaves its element without a tap and a ripple; a tap only counts while the header is [shown], with a haptic tick and a 48 dp target.
 // Compared: SystemUI's shade header (clock at the start, battery at the end, https://github.com/LineageOS/android_frameworks_base/blob/lineage-22.2/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt),
 // iOS (the battery pill with the percent inside, the Lock Screen's glanceables), Pixel Launcher (notification dots with counts); winner per piece:
 // SystemUI's two-ended header, iOS's battery.
@@ -24,7 +31,18 @@ package com.yaz.launcher.feature.home
 // Input: while no panel is open the header takes none at all. A Material Surface swallows the touches over it (it has an empty pointerInput), so
 // while the header is not shown the glass capsules and the button are replaced by plain boxes of the same minimum size; the header is also drawn
 // under the panels, which start under its measured height.
+import android.app.ActivityOptions
+import android.app.PendingIntent
+import android.content.ContentUris
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.AlarmClock
+import android.provider.CalendarContract
+import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +69,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -61,6 +80,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
@@ -74,7 +94,9 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -104,6 +126,8 @@ import com.yaz.launcher.ui.component.ZoneSurface
 import com.yaz.launcher.ui.component.rememberHaptics
 import com.yaz.launcher.ui.icon.AppIcons
 import java.text.NumberFormat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 // iOS's system green and Low Power Mode yellow.
 private val ChargingGreen = Color(0xFF34C759)
@@ -112,12 +136,99 @@ private val SaverYellow = Color(0xFFFFCC00)
 /** The least size of a button or capsule of the header. */
 private val TARGET = 44.dp
 
+// ShadeHeaderController's DEFAULT_CLOCK_INTENT, the clock's alarms
+// (https://github.com/LineageOS/android_frameworks_base/blob/lineage-23.0/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt#launchClockActivity).
+private val DEFAULT_CLOCK_INTENT = Intent(AlarmClock.ACTION_SHOW_ALARMS)
+
+// The battery's tap in ShadeHeaderController (batteryIcon.setOnClickListener, ACTION_POWER_USAGE_SUMMARY, same file as above).
+private val POWER_USAGE_INTENT = Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
+
+// BottomBarViewModel.onSettingsClicked's intent, with its FLAG_ACTIVITY_REORDER_TO_FRONT
+// (https://github.com/LineageOS/android_frameworks_base/blob/lineage-23.0/packages/SystemUI/src/com/android/systemui/volume/panel/component/bottombar/ui/viewmodel/BottomBarViewModel.kt#onSettingsClicked).
+// SystemUI passes it to its ActivityStarter, which also dismisses the shade and the keyguard and logs the event: none of those exists in a third-party app.
+private val SOUND_SETTINGS_INTENT = Intent(Settings.ACTION_SOUND_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+
+// BcSmartSpaceUtil.getOpenCalendarIntent: the calendar's day view at the current time
+// (https://github.com/LawnchairLauncher/lawnchair/blob/16-dev/lawnchair/src/app/lawnchair/smartspace/BcSmartSpaceUtil.kt#getOpenCalendarIntent).
+private fun getOpenCalendarIntent(): Intent =
+    Intent(Intent.ACTION_VIEW).setData(
+        ContentUris.appendId(
+            CalendarContract.CONTENT_URI.buildUpon().appendPath("time"),
+            System.currentTimeMillis(),
+        ).build(),
+    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+
+// Trebuchet's Utilities.allowBGLaunch: the options let the launch start from the background on Android 14 and later
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Utilities.java#allowBGLaunch).
+// Trebuchet's ATLEAST_U is Build.VERSION.SDK_INT >= UPSIDE_DOWN_CAKE.
+private fun allowBGLaunch(options: ActivityOptions): ActivityOptions {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        options.setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+    }
+    return options
+}
+
+// The body of BcSmartSpaceUtil.setOnClickListener's click (an Intent through startActivity, else a PendingIntent through send with the options of
+// allowBGLaunch, all in runCatching)
+// (https://github.com/LawnchairLauncher/lawnchair/blob/16-dev/lawnchair/src/app/lawnchair/smartspace/BcSmartSpaceUtil.kt#setOnClickListener).
+// Changes: the SmartspaceAction (its intent and pendingIntent) becomes the two arguments, and its onClick runnable and the extra View.OnClickListener
+// are dropped (the header has none; the haptic tick and the panels' closing are the caller's, in the click). Lawnchair's ATLEAST_U test is the same as
+// allowBGLaunch's. SystemUI's launch collapses the shade (postStartActivityDismissingKeyguard,
+// https://github.com/LineageOS/android_frameworks_base/blob/lineage-23.0/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt#launchClockActivity):
+// ours is PanelHeader's onLaunched, which HomeScreen's panelActions-style close() answers.
+private fun launchAction(context: Context, intent: Intent?, pendingIntent: PendingIntent?) {
+    val options = allowBGLaunch(ActivityOptions.makeBasic())
+    runCatching {
+        if (intent != null) {
+            context.startActivity(intent)
+        } else if (pendingIntent != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                pendingIntent.send(options.toBundle())
+            } else {
+                pendingIntent.send()
+            }
+        }
+    }
+}
+
+// ShadeHeaderController.launchClockActivity: the next alarm's showIntent when there is one, else DEFAULT_CLOCK_INTENT. SystemUI posts it through its
+// ActivityStarter (postStartActivityDismissingKeyguard); here it goes through launchAction.
+private fun launchClockActivity(context: Context, nextAlarmIntent: PendingIntent?) {
+    if (nextAlarmIntent != null) {
+        launchAction(context, null, nextAlarmIntent)
+    } else {
+        launchAction(context, DEFAULT_CLOCK_INTENT, null)
+    }
+}
+
+// Whether an activity answers [intent], as startActivity would find it (the apps with a launcher entry are visible through the manifest's queries,
+// the clock, calendar and Settings apps among them). An Intent that fails this makes its element not clickable. This check is ours (SystemUI
+// launches system intents it knows are there): the brief's dead end.
+private fun canOpen(context: Context, intent: Intent): Boolean =
+    context.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY) != null
+
+// The tap of a header element: at least 48 dp, with the ripple in [shape] and the TalkBack label [label]; nothing when it is not [enabled] (the
+// header is hidden, or no activity answers its intent). The size is kept either way, so the header does not change its height as it appears.
+private fun Modifier.tap(enabled: Boolean, label: String, shape: Shape, onClick: () -> Unit): Modifier =
+    if (enabled) {
+        clip(shape).clickable(onClickLabel = label, role = Role.Button, onClick = onClick).minimumInteractiveComponentSize()
+    } else {
+        minimumInteractiveComponentSize()
+    }
+
 /**
  * The header. [shown] is true while a panel is open or opening: only then does the clock tick, do the receivers listen and the buttons answer a tap
  * (the caller sets its alpha and hides it from accessibility when it is not shown). [onOpen] starts the app of a package, [onSettings] opens Settings.
  */
 @Composable
-fun PanelHeader(shown: Boolean, dateMode: DateMode, onOpen: (String) -> Unit, onSettings: () -> Unit, modifier: Modifier = Modifier) {
+fun PanelHeader(
+    shown: Boolean,
+    dateMode: DateMode,
+    onOpen: (String) -> Unit,
+    onSettings: () -> Unit,
+    onLaunched: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     val locale = LocalConfiguration.current.locales[0]
     val started by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
@@ -130,10 +241,21 @@ fun PanelHeader(shown: Boolean, dateMode: DateMode, onOpen: (String) -> Unit, on
     // The default phone and messages apps, asked each time the header appears and kept after (the header does not jump as it closes).
     var dialer by remember { mutableStateOf<String?>(null) }
     var messages by remember { mutableStateOf<String?>(null) }
+    // Whether an activity answers each tap's Intent, asked at the same time (an element whose Intent no activity answers is not clickable).
+    var clockOpens by remember { mutableStateOf(false) }
+    var batteryOpens by remember { mutableStateOf(false) }
+    var modeOpens by remember { mutableStateOf(false) }
+    var calendarOpens by remember { mutableStateOf(false) }
     LaunchedEffect(active) {
         if (active) {
             dialer = defaultDialerPackage(context)
             messages = defaultSmsPackage(context)
+            withContext(Dispatchers.IO) {
+                clockOpens = canOpen(context, DEFAULT_CLOCK_INTENT)
+                batteryOpens = canOpen(context, POWER_USAGE_INTENT)
+                modeOpens = canOpen(context, SOUND_SETTINGS_INTENT)
+                calendarOpens = canOpen(context, getOpenCalendarIntent())
+            }
         }
     }
     val missed = dialer?.let { counts[it] } ?: 0
@@ -163,6 +285,21 @@ fun PanelHeader(shown: Boolean, dateMode: DateMode, onOpen: (String) -> Unit, on
     }
     val haptics = rememberHaptics()
     val settingsLabel = stringResource(R.string.apps_settings)
+    // The taps: each one only while the header is shown and when something answers its Intent (the next alarm's showIntent always does).
+    val zone = MaterialTheme.shapes.large
+    val nextAlarmIntent = phone.nextAlarmIntent
+    val clockTap = shown && (nextAlarmIntent != null || clockOpens)
+    val clockLabel = stringResource(R.string.header_tap_clock)
+    val alarmLabel = stringResource(R.string.header_tap_alarm)
+    val batteryLabel = stringResource(R.string.header_tap_battery)
+    val modeLabel = stringResource(R.string.header_tap_mode)
+    val dateLabel = stringResource(R.string.header_tap_date)
+    // After each launch the panels shut ([onLaunched]): ShadeHeaderController starts its activities through
+    // ActivityStarter.postStartActivityDismissingKeyguard, which collapses the shade (launchClockActivity), and HomeScreen's panelActions shuts the
+    // panels after every action in the same way.
+    val openClock = { haptics.tick(); launchClockActivity(context, nextAlarmIntent); onLaunched() }
+    val openBattery = { haptics.tick(); launchAction(context, POWER_USAGE_INTENT, null); onLaunched() }
+    val openCalendar = { haptics.tick(); launchAction(context, getOpenCalendarIntent(), null); onLaunched() }
 
     Column(
         modifier
@@ -178,30 +315,50 @@ fun PanelHeader(shown: Boolean, dateMode: DateMode, onOpen: (String) -> Unit, on
                 color = LocalContentColor.current,
                 lineHeightStyle = LineHeightStyle(alignment = LineHeightStyle.Alignment.Center, trim = LineHeightStyle.Trim.Both)
             )
-            BasicText(
-                buildAnnotatedString {
-                    append(clock)
-                    withStyle(SpanStyle(fontSize = 0.4.em)) {
-                        append(GlanceDate.seconds(now, locale))
-                        if (period != null) append(" $period")
-                    }
-                },
-                style = style,
-                maxLines = 1,
-                autoSize = TextAutoSize.StepBased(minFontSize = 24.sp, maxFontSize = style.fontSize, stepSize = 1.sp),
-                modifier = Modifier.weight(1f)
-            )
-            battery?.let { BatteryPill(it, locale) }
+            // The tap sits on the digits only, not on the empty width after them.
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                BasicText(
+                    buildAnnotatedString {
+                        append(clock)
+                        withStyle(SpanStyle(fontSize = 0.4.em)) {
+                            append(GlanceDate.seconds(now, locale))
+                            if (period != null) append(" $period")
+                        }
+                    },
+                    style = style,
+                    maxLines = 1,
+                    autoSize = TextAutoSize.StepBased(minFontSize = 24.sp, maxFontSize = style.fontSize, stepSize = 1.sp),
+                    modifier = Modifier.tap(clockTap, clockLabel, zone, openClock)
+                )
+            }
+            // The mode's icon just before the battery (SystemUI's status icons come before the battery), its words as the description.
+            mode?.let { (icon, words) ->
+                Box(Modifier.tap(shown && modeOpens, modeLabel, CircleShape) {
+                    haptics.tick()
+                    launchAction(context, SOUND_SETTINGS_INTENT, null)
+                    onLaunched()
+                },contentAlignment = Alignment.Center) {
+                    Icon(icon, contentDescription = words, modifier = Modifier.size(18.dp))
+                }
+            }
+            battery?.let { BatteryPill(it, locale, Modifier.tap(shown && batteryOpens, batteryLabel, zone, openBattery)) }
         }
         timeLeft?.let {
-            Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.align(Alignment.End).padding(top = 4.dp))
+            Text(
+                it,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.align(Alignment.End).padding(top = 4.dp).tap(shown && batteryOpens, batteryLabel, zone, openBattery)
+            )
         }
         // The date on the left, Settings on the right on the same row.
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Column(Modifier.weight(1f)) {
-                gregorian?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
-                hijri?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
-                specialText?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.tertiary) }
+            // One tap for the three date lines, on the words only (the box takes the width, the column inside wraps them).
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                Column(Modifier.tap(shown && calendarOpens, dateLabel, zone, openCalendar)) {
+                    gregorian?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
+                    hijri?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
+                    specialText?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.tertiary) }
+                }
             }
             if (shown) {
                 // The suite's round glass icon button, at least 44 dp.
@@ -212,23 +369,14 @@ fun PanelHeader(shown: Boolean, dateMode: DateMode, onOpen: (String) -> Unit, on
                 Spacer(Modifier.size(TARGET))
             }
         }
-        // The alarm on the left, the phone's mode on the right.
-        if (alarm != null || mode != null) {
-            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Box(Modifier.weight(1f)) {
-                    if (alarm != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(AppIcons.Alarm, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Text(alarm, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 6.dp))
-                        }
-                    }
-                }
-                mode?.let { (icon, words) ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text(words, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 6.dp))
-                    }
-                }
+        // The alarm, alone on the left; it opens what the time opens.
+        if (alarm != null) {
+            Row(
+                Modifier.padding(top = 4.dp).tap(clockTap, alarmLabel, zone, openClock),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(AppIcons.Alarm, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(alarm, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 6.dp))
             }
         }
         // The capsules fill the width with equal weights, only the ones with something to show; no row at all when there is none.
@@ -289,7 +437,7 @@ private fun Capsule(description: String, enabled: Boolean, modifier: Modifier, o
  * the error colour; else onSurface. The body is a minimum size: it grows with the number's font.
  */
 @Composable
-private fun BatteryPill(battery: BatteryState, locale: java.util.Locale) {
+private fun BatteryPill(battery: BatteryState, locale: java.util.Locale, modifier: Modifier = Modifier) {
     val colors = MaterialTheme.colorScheme
     val fill = when {
         battery.charging -> ChargingGreen
@@ -316,7 +464,7 @@ private fun BatteryPill(battery: BatteryState, locale: java.util.Locale) {
         },
         battery.percent
     )
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics { contentDescription = description }) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.semantics { contentDescription = description }) {
         if (battery.charging) Icon(AppIcons.Bolt, contentDescription = null, tint = ChargingGreen, modifier = Modifier.size(24.dp))
         Box(
             Modifier

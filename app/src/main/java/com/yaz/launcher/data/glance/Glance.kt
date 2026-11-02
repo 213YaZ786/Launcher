@@ -14,6 +14,7 @@ package com.yaz.launcher.data.glance
 //   (https://developer.android.com/reference/android/os/BatteryManager#computeChargeTimeRemaining()).
 import android.app.AlarmManager
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -39,8 +40,11 @@ data class BatteryState(val percent: Int, val charging: Boolean, val charged: Bo
 /** How the phone rings now: Do not disturb comes first, then the ringer's silent and vibrate. */
 enum class PhoneMode { NORMAL, VIBRATE, SILENT, DND }
 
-/** The mode of the ringer and the next alarm in the next 24 hours (its time in milliseconds, 0 when none). */
-data class PhoneStatus(val mode: PhoneMode = PhoneMode.NORMAL, val alarmAt: Long = 0L)
+/**
+ * The mode of the ringer and the next alarm in the next 24 hours (its time in milliseconds, 0 when none), and [nextAlarmIntent], the alarm's showIntent
+ * (the screen the clock app opens for it), null when the alarm has none or when there is no alarm shown.
+ */
+data class PhoneStatus(val mode: PhoneMode = PhoneMode.NORMAL, val alarmAt: Long = 0L, val nextAlarmIntent: PendingIntent? = null)
 
 /** The alarms shown are the ones in the next day. */
 private const val ALARM_WINDOW_MS = 24L * 60 * 60 * 1000
@@ -62,7 +66,11 @@ fun readBattery(context: Context, intent: Intent): BatteryState {
     return BatteryState(percent, charging, charged, saver, remaining)
 }
 
-/** PhoneStatusBarPolicy.updateVolumeZen and updateAlarm: Do not disturb, else the ringer's mode, and the next alarm clock within a day. */
+/**
+ * PhoneStatusBarPolicy.updateVolumeZen and updateAlarm: Do not disturb, else the ringer's mode, and the next alarm clock within a day. The alarm's
+ * showIntent is kept beside its time, as ShadeHeaderController's nextAlarmCallback keeps nextAlarm?.showIntent in nextAlarmIntent
+ * (https://github.com/LineageOS/android_frameworks_base/blob/lineage-23.0/packages/SystemUI/src/com/android/systemui/shade/ShadeHeaderController.kt#nextAlarmIntent).
+ */
 fun readPhone(context: Context, now: Long = System.currentTimeMillis()): PhoneStatus {
     val filter = context.getSystemService(NotificationManager::class.java)?.currentInterruptionFilter
         ?: NotificationManager.INTERRUPTION_FILTER_ALL
@@ -77,9 +85,12 @@ fun readPhone(context: Context, now: Long = System.currentTimeMillis()): PhoneSt
             else -> PhoneMode.NORMAL
         }
     }
-    val trigger = context.getSystemService(AlarmManager::class.java)?.nextAlarmClock?.triggerTime ?: 0L
+    val nextAlarm = context.getSystemService(AlarmManager::class.java)?.nextAlarmClock
+    val trigger = nextAlarm?.triggerTime ?: 0L
     val alarm = if (trigger > now && trigger - now <= ALARM_WINDOW_MS) trigger else 0L
-    return PhoneStatus(mode, alarm)
+    // nextAlarmIntent = nextAlarm?.showIntent; ours goes with the alarm's window: no alarm shown, no intent.
+    val nextAlarmIntent = if (alarm > 0L) nextAlarm?.showIntent else null
+    return PhoneStatus(mode, alarm, nextAlarmIntent)
 }
 
 /**
