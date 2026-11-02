@@ -24,6 +24,8 @@
     <string name="ps_add_button_label">Install apps</string>
 
     <!-- The apps panel -->
+    <!-- Trebuchet's res/values/strings.xml action_deep_shortcut: what TalkBack says a long press on an app does -->
+    <string name="action_deep_shortcut">Shortcut Menu</string>
     <string name="menu_app_info">App info</string>
     <string name="menu_uninstall">Uninstall</string>
     <string name="menu_update_in_store">Update in Store</string>
@@ -53,6 +55,7 @@
 
     <!-- Recents -->
     <string name="menu_remove_recent">Remove from list</string>
+    <string name="menu_options">Options</string>
     <string name="menu_force_stop">Force stop</string>
     <string name="recents_empty_title">No recent apps</string>
     <string name="recents_empty_text">The apps you use appear here.</string>

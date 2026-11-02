@@ -32,9 +32,13 @@ import java.util.concurrent.Executors
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.yaz.launcher.data.apps.LauncherModel
+import com.yaz.launcher.feature.home.AdapterHolder
 import com.yaz.launcher.navigation.LauncherApp
 import com.yaz.launcher.ui.theme.AppSurface
 import org.koin.android.ext.android.inject
+
+/** Intent.ACTION_SHOW_WORK_APPS, hidden from the SDK: the intent the work profile's launcher shortcut sends the home app. */
+private const val ACTION_SHOW_WORK_APPS = "android.intent.action.SHOW_WORK_APPS"
 
 /** Launcher, the home screen: the app's one window. */
 class MainActivity : ComponentActivity() {
@@ -50,6 +54,11 @@ class MainActivity : ComponentActivity() {
 
     // Whether the screens may animate the last Home press: Trebuchet's alreadyOnHome, false when the system brings the home to the front.
     private var homeAnimated by mutableStateOf(true)
+
+    // How many times the apps were asked for by an intent (ACTION_ALL_APPS, ACTION_SHOW_WORK_APPS), and the ask not yet answered by the home
+    // screen: the count makes every route above Home leave, the request opens the panel once Home is in front (the home screen clears it).
+    private var appsSignal by mutableIntStateOf(0)
+    private var appsTab by mutableStateOf<Int?>(null)
 
     // Store's MainActivity.onCreate.
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,7 +79,7 @@ class MainActivity : ComponentActivity() {
         val systemUiController = SystemUiController(window, window.decorView)
         setContent {
             CompositionLocalProvider(LocalWallpaperColorHints provides hintsOfWallpaper.hints, LocalSystemUiController provides systemUiController) {
-                AppSurface { LauncherApp(homeSignal, homeAnimated, screenOffSignal) }
+                AppSurface { LauncherApp(homeSignal, homeAnimated, screenOffSignal, appsSignal, appsTab) { appsTab = null } }
             }
         }
     }
@@ -106,11 +115,24 @@ class MainActivity : ComponentActivity() {
     // Trebuchet's rule in the same method: alreadyOnHome = mHasFocus && (intent.getFlags() & FLAG_ACTIVITY_BROUGHT_TO_FRONT) != FLAG_ACTIVITY_BROUGHT_TO_FRONT;
     // the state change and the closing views animate only then (goToState(NORMAL, alreadyOnHome)), otherwise they are instant, the system
     // animating the way home itself. mHasFocus is the window's focus, hasWindowFocus() here.
+    // The same method takes two more intents: ACTION_ALL_APPS shows the apps (showAllAppsFromIntent(alreadyOnHome)) and ACTION_SHOW_WORK_APPS
+    // shows them on the work tab (showAllAppsWithSelectedTabFromIntent(alreadyOnHome, WORK)); both close what is open first and animate only
+    // when already on home, like the Home press. Here the tab is the work profile's tile, scrolled to by the Apps panel.
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java#showAllAppsFromIntent)
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        val alreadyOnHome = hasWindowFocus() && (intent.flags and Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT) != Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT
         if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) {
-            homeAnimated = hasWindowFocus() && (intent.flags and Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT) != Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT
+            homeAnimated = alreadyOnHome
             homeSignal++
+        } else if (intent.action == Intent.ACTION_ALL_APPS) {
+            homeAnimated = alreadyOnHome
+            appsTab = AdapterHolder.MAIN
+            appsSignal++
+        } else if (intent.action == ACTION_SHOW_WORK_APPS) {
+            homeAnimated = alreadyOnHome
+            appsTab = AdapterHolder.WORK
+            appsSignal++
         }
     }
 }

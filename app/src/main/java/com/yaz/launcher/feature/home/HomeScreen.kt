@@ -40,7 +40,8 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.animateTo
 import androidx.compose.foundation.gestures.snapTo
 import androidx.compose.foundation.gestures.anchoredDraggable
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -78,7 +79,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.LayoutDirection
+import android.app.WallpaperManager
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -86,6 +95,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
@@ -141,12 +151,29 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
 
+// ActivityAllAppsContainerView.AdapterHolder.MAIN and WORK, the tab Launcher.onNewIntent asks showAllAppsWithSelectedTabFromIntent for: the
+// apps, or the work apps (here the work profile's tile of the Apps panel).
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/ActivityAllAppsContainerView.java#L1564-L1567)
+object AdapterHolder {
+    const val MAIN = 0
+    const val WORK = 1
+}
+
 /**
  * The home screen with its model: the guide first, then the wallpaper and the panels. [onSettings] opens the Settings screen, [onActivities] the
- * Activities screen of a package.
+ * Activities screen of a package. [appsTab] is an intent's ask for the Apps panel on a tab (Launcher.showAllAppsFromIntent), null when none,
+ * answered once by [onAppsTabShown].
  */
 @Composable
-fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSignal: Int = 0, onSettings: () -> Unit = {}, onActivities: (String) -> Unit = {}) {
+fun HomeScreen(
+    homeSignal: Int = 0,
+    homeAnimated: Boolean = true,
+    screenOffSignal: Int = 0,
+    appsTab: Int? = null,
+    onAppsTabShown: () -> Unit = {},
+    onSettings: () -> Unit = {},
+    onActivities: (String) -> Unit = {}
+) {
     val model: LauncherModel = koinInject()
     val store: SettingsStore = koinInject()
     val state by model.state.collectAsState()
@@ -158,6 +185,8 @@ fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSigna
     val scope = rememberCoroutineScope()
     // The guide, at the first start; again from Settings, About (its own route).
     if (!settings.setupDone) {
+        // An ask for the apps has nothing to show before the guide is done: it is dropped, not kept for later.
+        if (appsTab != null) LaunchedEffect(appsTab) { onAppsTabShown() }
         GuideScreen(onFinish = {})
         return
     }
@@ -245,7 +274,8 @@ fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSigna
     HomeContent(
         state, settings.themeMode, actions, panelOpacity = settings.panelOpacity, iconShape = settings.iconShape, themedIcons = settings.themedIcons,
         edgeTabs = settings.edgeTabs, marks = AppMarks(dots, updates), pinned = pinned, layout = layout, homeSignal = homeSignal, homeAnimated = homeAnimated,
-        screenOffSignal = screenOffSignal, swipeDown = settings.swipeDown, dateMode = settings.dateMode
+        screenOffSignal = screenOffSignal, swipeDown = settings.swipeDown, dateMode = settings.dateMode,
+        appsTab = appsTab, onAppsTabShown = onAppsTabShown
     )
 }
 
@@ -294,7 +324,10 @@ fun HomeContent(
     /** What a swipe down on the wallpaper does. */
     swipeDown: SwipeDown = SwipeDown.NOTHING,
     /** The calendar of the header shown over the open panels. */
-    dateMode: DateMode = DateMode.BOTH
+    dateMode: DateMode = DateMode.BOTH,
+    /** An intent's ask for the Apps panel on a tab (Launcher.showAllAppsFromIntent), null when none, answered once by [onAppsTabShown]. */
+    appsTab: Int? = null,
+    onAppsTabShown: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
@@ -318,6 +351,8 @@ fun HomeContent(
     }
     val sheet = remember { AnchoredDraggableState(if (initial == Panel.BOTTOM && hasBottom) Sheet.OPEN else Sheet.CLOSED) }
     val seen = remember { mutableSetOf<String>() }
+    // Goes up each time the Apps panel must show the work profile's tile (the work apps intent): the panel scrolls to it.
+    var workScroll by remember { mutableIntStateOf(0) }
     // The header's measured height in px: the side panels and the Apps panel at the bottom start under it.
     var headerPx by remember { mutableIntStateOf(0) }
     // Read when a finger goes down (see onGestureDown below): it went down outside the system's gesture band, and the Apps grids were at the
@@ -358,8 +393,10 @@ fun HomeContent(
             successProgress(tablet, fromApps = from == Sheet.OPEN && layout.bottom == PanelKind.APPS, toApps = to == Sheet.OPEN && layout.bottom == PanelKind.APPS)
         }
     }
-    val sideFling = remember(side, flingVelocity, sideSuccess) { releaseFlingBehavior(side, flingVelocity, sideSuccess, spring) }
-    val sheetFling = remember(sheet, flingVelocity, sheetSuccess) { releaseFlingBehavior(sheet, flingVelocity, sheetSuccess, spring) }
+    // The release settles for BaseSwipeDetector.calculateDuration's duration (settleSpec in PanelDrag.kt); the spring stays for the taps on the
+    // tabs, Back and the scrim, which have no finger velocity.
+    val sideFling = remember(side, flingVelocity, sideSuccess) { releaseFlingBehavior(side, flingVelocity, sideSuccess) }
+    val sheetFling = remember(sheet, flingVelocity, sheetSuccess) { releaseFlingBehavior(sheet, flingVelocity, sheetSuccess) }
     val close: () -> Unit = {
         scope.launch { side.animateTo(Side.CLOSED, spring) }
         scope.launch { sheet.animateTo(Sheet.CLOSED, spring) }
@@ -449,6 +486,24 @@ fun HomeContent(
 
     // The menu of a long press on the wallpaper: Wallpaper and Settings, as Trebuchet's OptionsPopupView.getOptions lists them.
     val wallpaperMenu = rememberPillMenu()
+    // Launcher.showAllAppsWithSelectedTabFromIntent(alreadyOnHome, tab), called by onNewIntent for ACTION_ALL_APPS (showAllAppsFromIntent, tab
+    // MAIN) and ACTION_SHOW_WORK_APPS (tab WORK): AbstractFloatingView.closeAllOpenViews(this), getStateManager().goToState(ALL_APPS, alreadyOnHome),
+    // mAppsView.switchToTab(tab), in that order. ALL_APPS is the panel that holds Apps (the right one first, then the left, then the bottom
+    // one), the others closed, animated only when already on home; the WORK tab is the work profile's tile, scrolled to by the Apps panel.
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java#showAllAppsFromIntent)
+    LaunchedEffect(appsTab) {
+        val tab = appsTab ?: return@LaunchedEffect
+        wallpaperMenu.close()
+        repeat(2) { withFrameNanos { } } // the anchors are set by the layout
+        val allApps = listOf(Panel.RIGHT, Panel.LEFT, Panel.BOTTOM).firstOrNull { layout.at(it) == PanelKind.APPS }
+        val alreadyOnHome = homeAnimated
+        val toSide = if (allApps == Panel.LEFT) Side.LEFT else if (allApps == Panel.RIGHT) Side.RIGHT else Side.CLOSED
+        val toSheet = if (allApps == Panel.BOTTOM) Sheet.OPEN else Sheet.CLOSED
+        if (tab == AdapterHolder.WORK) workScroll++
+        scope.launch { if (alreadyOnHome) side.animateTo(toSide, spring) else side.snapTo(toSide) }
+        scope.launch { if (alreadyOnHome) sheet.animateTo(toSheet, spring) else sheet.snapTo(toSheet) }
+        onAppsTabShown()
+    }
     // Launcher.onNewIntent: closeAllOpenViewsExcept, the menu of a long press on the wallpaper closes when Home is pressed (or the screen turns off).
     LaunchedEffect(homeSignal, screenOffSignal) {
         if (homeSignal > 0 || screenOffSignal > 0) wallpaperMenu.close()
@@ -458,6 +513,7 @@ fun HomeContent(
         PillItem(AppIcons.Settings, stringResource(R.string.menu_settings), PillMotion.WIGGLE) { actions.openSettings() }
     )
     val homeOptions = stringResource(R.string.home_options)
+    val rootView = LocalView.current
     // The swipe down for the shade, null when off; the edge tabs' windows read it too (they are windows of their own).
     val shadeSwipe: (() -> Unit)? = if (swipeDown == SwipeDown.NOTIFICATIONS) actions.openNotifications else null
 
@@ -554,6 +610,8 @@ fun HomeContent(
                 )
                 // What is decided when a finger goes down, before the drags see it (nothing is consumed): whether it went down in the system's
                 // gesture band, and where the Apps grids were.
+                // A drag along neither axis starts no panel (SingleAxisSwipeDetector.shouldScrollStart), while nothing is open.
+                .singleAxisSwipeGate { side.targetValue == Side.CLOSED && sheet.targetValue == Sheet.CLOSED }
                 .onGestureDown { position, size ->
                     val bottomEdge = bottomBand.getBottom(density)
                     sheetStartOk = position.y < size.height - bottomEdge
@@ -581,7 +639,29 @@ fun HomeContent(
                         } else {
                             Modifier
                                 .then(wallpaperMenu.tracker)
-                                .pointerInput(Unit) { detectTapGestures(onLongPress = { wallpaperMenu.open() }) }
+                                // WorkspaceTouchListener, set on the workspace by Workspace (the wallpaper's touches):
+                                // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/WorkspaceTouchListener.java#onTouch
+                                // canHandleLongPress: AbstractFloatingView.getTopOpenView(mLauncher) == null && mLauncher.isInState(NORMAL).
+                                // edgeMarginPx: DeviceProfile's R.dimen.dynamic_grid_edge_margin, 10.77dp.
+                                // Workspace.onWallpaperTap sends the tap to the wallpaper at its place on the screen, so a live wallpaper reacts:
+                                // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Workspace.java#onWallpaperTap
+                                .workspaceTouchListener(
+                                    canHandleLongPress = { !wallpaperMenu.shown && side.targetValue == Side.CLOSED && sheet.targetValue == Sheet.CLOSED },
+                                    insets = WindowInsets.systemBars.union(WindowInsets.displayCutout),
+                                    edgeMarginPx = with(density) { 10.77.dp.toPx() },
+                                    direction = direction,
+                                    showDefaultOptions = { wallpaperMenu.open() },
+                                    onWallpaperTap = { position, secondary ->
+                                        val position0 = IntArray(2).also { rootView.getLocationOnScreen(it) }
+                                        runCatching {
+                                            WallpaperManager.getInstance(rootView.context).sendWallpaperCommand(
+                                                rootView.windowToken,
+                                                if (secondary) WallpaperManager.COMMAND_SECONDARY_TAP else WallpaperManager.COMMAND_TAP,
+                                                position0[0] + position.x.toInt(), position0[1] + position.y.toInt(), 0, null
+                                            )
+                                        }
+                                    }
+                                )
                                 .semantics { onLongClick(label = homeOptions) { wallpaperMenu.open(); true } }
                         }
                     )
@@ -615,16 +695,18 @@ fun HomeContent(
                 SidePanel(
                     layout.left, Panel.LEFT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
                     progress = leftProgress, travelX = { -sideTravel + side.offsetOrZero() },
-                    close = remember(side, flingVelocity, sideSuccess) { side.closeWithScroll(Side.LEFT, flingVelocity, sideSuccess, spring) { gridAtStart } },
-                    open = leftVisible || side.targetValue == Side.LEFT
+                    close = remember(side, flingVelocity, sideSuccess) { side.closeWithScroll(Side.LEFT, flingVelocity, sideSuccess) { gridAtStart } },
+                    open = leftVisible || side.targetValue == Side.LEFT,
+                    workScroll = workScroll
                 )
             }
             if (hasRight) {
                 SidePanel(
                     layout.right, Panel.RIGHT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
                     progress = rightProgress, travelX = { sideTravel + side.offsetOrZero() },
-                    close = remember(side, flingVelocity, sideSuccess) { side.closeWithScroll(Side.RIGHT, flingVelocity, sideSuccess, spring) { gridAtStart } },
-                    open = rightVisible || side.targetValue == Side.RIGHT
+                    close = remember(side, flingVelocity, sideSuccess) { side.closeWithScroll(Side.RIGHT, flingVelocity, sideSuccess) { gridAtStart } },
+                    open = rightVisible || side.targetValue == Side.RIGHT,
+                    workScroll = workScroll
                 )
             }
             val bottomOpen = bottomVisible || sheet.targetValue == Sheet.OPEN
@@ -648,7 +730,8 @@ fun HomeContent(
                     state, pinned, panelActions, seen, bottomGrid,
                     edge = Panel.BOTTOM,
                     progress = bottomProgress,
-                    close = remember(sheet, flingVelocity, sheetSuccess) { sheet.closeWithScrollDown(flingVelocity, sheetSuccess, spring) { bottomGridAtTop } },
+                    close = remember(sheet, flingVelocity, sheetSuccess) { sheet.closeWithScrollDown(flingVelocity, sheetSuccess) { bottomGridAtTop } },
+                    workScroll = workScroll,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = bottom)
@@ -708,7 +791,8 @@ private fun BoxScope.SidePanel(
     progress: () -> Float,
     travelX: () -> Float,
     close: androidx.compose.ui.input.nestedscroll.NestedScrollConnection,
-    open: Boolean
+    open: Boolean,
+    workScroll: Int
 ) {
     val left = edge == Panel.LEFT
     // Closed, the panel stays composed off the screen and is hidden from accessibility services.
@@ -725,7 +809,8 @@ private fun BoxScope.SidePanel(
                 .fillMaxHeight()
                 .graphicsLayer { translationX = travelX() }
                 .then(semantics),
-            close = close
+            close = close,
+            workScroll = workScroll
         )
         PanelKind.RECENTS -> RecentsPanel(
             state, actions, seen,
@@ -756,6 +841,113 @@ private const val MIN_SCRIM_STRENGTH = 1f
 // Trebuchet's DepthController derives the blur from the state's progress the same way:
 // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/quickstep/src/com/android/launcher3/statehandlers/DepthController.java
 private fun fractionOf(offset: Float, end: Float): Float = if (end.isNaN() || end == 0f) 0f else (offset / end).coerceIn(0f, 1f)
+
+// WorkspaceTouchListener's long press states: STATE_PENDING_PARENT_INFORM is the one between the long press and the next event, which tells the
+// workspace to drop its touch; then STATE_COMPLETED, and every later event is eaten.
+private const val STATE_CANCELLED = 0
+private const val STATE_REQUESTED = 1
+private const val STATE_PENDING_PARENT_INFORM = 2
+private const val STATE_COMPLETED = 3
+
+// TouchUtil.isMouseRightClickDownOrMove: the event comes from the mouse and its secondary (right) button is down.
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/util/TouchUtil.java#isMouseRightClickDownOrMove)
+private fun isMouseRightClickDownOrMove(ev: PointerEvent): Boolean =
+    ev.changes.first().type == PointerType.Mouse && ev.buttons.isSecondaryPressed
+
+// CheckLongPressHelper.isStylusButtonPressed: a stylus with its button pressed.
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/CheckLongPressHelper.java#isStylusButtonPressed)
+private fun isStylusButtonPressed(ev: PointerEvent): Boolean =
+    ev.changes.first().type == PointerType.Stylus && ev.buttons.isSecondaryPressed
+
+// The touch listener of the bare wallpaper, WorkspaceTouchListener.onTouch: a long press (the system's timeout, GestureDetector.onLongPress) shows the
+// default options at the touch point, only inside the window less the system insets and the edge margin (mTempRect.inset(edgeMarginPx)); it is
+// cancelled once the finger moves past twice the touch slop, or when another gesture took the touch (mWorkspace.isHandlingTouch); a mouse right
+// click (TouchUtil.isMouseRightClickDownOrMove) or a stylus with its button down (CheckLongPressHelper.isStylusButtonPressed) shows them at once.
+// The up of a touch nobody took is Workspace.onWallpaperTap: COMMAND_TAP for the first finger, COMMAND_SECONDARY_TAP for another one (the callback
+// sends it to the wallpaper). The shape of the gesture loop is detectTapGestures' (Compose's tap recipe, waitForLongPress and consumeUntilUp).
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/WorkspaceTouchListener.java#onTouch)
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Workspace.java#onWallpaperTap)
+// (https://github.com/androidx/androidx/blob/androidx-main/compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/TapGestureDetector.kt#detectTapGestures)
+private fun Modifier.workspaceTouchListener(
+    canHandleLongPress: () -> Boolean,
+    insets: WindowInsets,
+    edgeMarginPx: Float,
+    direction: LayoutDirection,
+    showDefaultOptions: () -> Unit,
+    onWallpaperTap: (Offset, Boolean) -> Unit
+): Modifier = pointerInput(Unit) {
+    // Use twice the touch slop as we are looking for long press which is more likely to cause movement.
+    val mTouchSlop = 2 * viewConfiguration.touchSlop
+    awaitEachGesture {
+        val ev = awaitFirstDown(requireUnconsumed = false)
+        ev.consume()
+        var mLongPressState = STATE_CANCELLED
+        val mTouchDownPoint = ev.position
+        fun cancelLongPress() {
+            mLongPressState = STATE_CANCELLED
+        }
+        fun maybeShowMenu() {
+            if (mLongPressState == STATE_REQUESTED) {
+                if (canHandleLongPress()) {
+                    mLongPressState = STATE_PENDING_PARENT_INFORM
+                    showDefaultOptions()
+                } else {
+                    cancelLongPress()
+                }
+            }
+        }
+        // Check if we can handle long press, and if the event is not near the edges.
+        var handleLongPress = canHandleLongPress()
+        if (handleLongPress) {
+            val mTempRect = Rect(
+                insets.getLeft(this, direction).toFloat(), insets.getTop(this).toFloat(),
+                (size.width - insets.getRight(this, direction)).toFloat(), (size.height - insets.getBottom(this)).toFloat()
+            ).deflate(edgeMarginPx)
+            handleLongPress = mTempRect.contains(mTouchDownPoint)
+        }
+        if (handleLongPress) {
+            mLongPressState = STATE_REQUESTED
+            // Mouse right button's ACTION_DOWN should immediately show menu
+            if (isMouseRightClickDownOrMove(currentEvent) || isStylusButtonPressed(currentEvent)) maybeShowMenu()
+        }
+        var lastUptime = ev.uptimeMillis
+        while (true) {
+            val event = if (mLongPressState == STATE_REQUESTED) {
+                withTimeoutOrNull(ev.uptimeMillis + viewConfiguration.longPressTimeoutMillis - lastUptime) { awaitPointerEvent() }
+            } else {
+                awaitPointerEvent()
+            }
+            if (event == null) {
+                // GestureDetector.onLongPress
+                maybeShowMenu()
+                continue
+            }
+            lastUptime = event.changes.first().uptimeMillis
+            val action = event.changes.firstOrNull { it.id == ev.id } ?: break
+            event.changes.firstOrNull { it.id != ev.id && it.changedToUp() }?.let { onWallpaperTap(it.position, true) }
+            if (mLongPressState == STATE_PENDING_PARENT_INFORM || mLongPressState == STATE_COMPLETED) {
+                // We have handled the touch, so nobody needs to know anything anymore.
+                mLongPressState = STATE_COMPLETED
+                event.changes.forEach { it.consume() }
+                if (!action.pressed) break
+                continue
+            }
+            if (action.isConsumed) {
+                cancelLongPress()
+                break
+            }
+            if (mLongPressState == STATE_REQUESTED) {
+                if ((action.position - mTouchDownPoint).getDistance() > mTouchSlop) cancelLongPress()
+                else if (isStylusButtonPressed(event)) maybeShowMenu()
+            }
+            if (action.changedToUp()) {
+                onWallpaperTap(action.position, false)
+                break
+            }
+            if (!action.pressed) break
+        }
+    }
+}
 
 // An entry on the left or right edge: a transparent tap target 48 dp wide (the Core App Quality touch target, reaching inwards from the edge)
 // with the entry's description, so TalkBack finds it. The tab itself, 12 dp by 64 dp, is a window of its own that blurs the wallpaper

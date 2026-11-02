@@ -15,10 +15,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
-import kotlin.math.abs
 
 /** The least way down, in dp, for a swipe to count. */
 private val SWIPE_DOWN_DISTANCE = 48.dp
@@ -51,8 +51,11 @@ fun Modifier.onGestureDown(onDown: (position: androidx.compose.ui.geometry.Offse
 }
 
 /**
- * Calls [onSwipeDown] when a finger lifts after going down more than 48 dp, more down than sideways, as the only finger, with nothing open
- * ([idle] true when the gesture starts and when it ends). The events are read on the Initial pass and left unconsumed. Off when [enabled] is false.
+ * Calls [onSwipeDown] when a finger lifts after going down more than 48 dp, as the only finger, with nothing open ([idle] true when the gesture
+ * starts and when it ends), and the drag was a vertical one: SingleAxisSwipeDetector.shouldScrollStart (its along displacement reaches the slop
+ * and the displacement across it, here for the downward way, the detector's negative one,
+ * https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/SingleAxisSwipeDetector.java#shouldScrollStart).
+ * The events are read on the Initial pass and left unconsumed. Off when [enabled] is false.
  */
 @Composable
 fun Modifier.onSwipeDown(enabled: Boolean, idle: () -> Boolean, onSwipeDown: () -> Unit): Modifier {
@@ -61,6 +64,7 @@ fun Modifier.onSwipeDown(enabled: Boolean, idle: () -> Boolean, onSwipeDown: () 
     if (!enabled) return this
     return pointerInput(Unit) {
         val distance = SWIPE_DOWN_DISTANCE.toPx()
+        val mTouchSlop = viewConfiguration.touchSlop
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             val idleAtStart = isIdle()
@@ -75,7 +79,7 @@ fun Modifier.onSwipeDown(enabled: Boolean, idle: () -> Boolean, onSwipeDown: () 
             }
             val dx = last.x - down.position.x
             val dy = last.y - down.position.y
-            if (alone && idleAtStart && isIdle() && dy > distance && abs(dy) > abs(dx)) fire()
+            if (alone && idleAtStart && isIdle() && dy > distance && shouldScrollStart(Direction.VERTICAL, Offset(dx, dy), mTouchSlop, DIRECTION_NEGATIVE)) fire()
         }
     }
 }

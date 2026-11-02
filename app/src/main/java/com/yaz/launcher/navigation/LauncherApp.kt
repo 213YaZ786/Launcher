@@ -55,7 +55,16 @@ object Routes {
 // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java): every route above Home
 // is left, as popBackStack(route, inclusive = false) does (https://developer.android.com/guide/navigation/backstack#pop), the animation being the pop's.
 @Composable
-fun LauncherApp(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSignal: Int = 0) {
+fun LauncherApp(
+    homeSignal: Int = 0,
+    homeAnimated: Boolean = true,
+    screenOffSignal: Int = 0,
+    // Goes up each time an intent asks for the apps (ACTION_ALL_APPS, ACTION_SHOW_WORK_APPS): Launcher.showAllAppsFromIntent closeAllOpenViews
+    // first, so the routes above Home are left as for a Home press; [appsTab] is the ask itself (an AdapterHolder tab), answered by the home screen.
+    appsSignal: Int = 0,
+    appsTab: Int? = null,
+    onAppsTabShown: () -> Unit = {}
+) {
     val nav = rememberNavController()
     val store: SettingsStore = koinInject()
     val settings by store.settings.collectAsState()
@@ -63,8 +72,8 @@ fun LauncherApp(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSign
     // True while a pop to Home must show no transition: Trebuchet's goToState(NORMAL, alreadyOnHome), instant when the home was brought to the front.
     // The NavHost's transition lambdas read it (https://developer.android.com/guide/navigation/use-graph/animate-transitions).
     var instant by remember { mutableStateOf(false) }
-    LaunchedEffect(homeSignal) {
-        if (homeSignal > 0) {
+    LaunchedEffect(homeSignal, appsSignal) {
+        if (homeSignal > 0 || appsSignal > 0) {
             instant = !homeAnimated
             nav.popBackStack(Routes.HOME, inclusive = false)
             // Cleared once the pop has settled: Home is the current route and two frames have been drawn.
@@ -90,6 +99,8 @@ fun LauncherApp(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSign
                 homeSignal = homeSignal,
                 homeAnimated = homeAnimated,
                 screenOffSignal = screenOffSignal,
+                appsTab = appsTab,
+                onAppsTabShown = onAppsTabShown,
                 onSettings = { nav.navigate(Routes.SETTINGS) },
                 onActivities = { nav.navigate(Routes.activities(it)) }
             )

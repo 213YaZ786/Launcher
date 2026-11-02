@@ -62,6 +62,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -129,7 +130,9 @@ fun AppsPanel(
     modifier: Modifier = Modifier,
     edge: Panel = Panel.RIGHT,
     progress: () -> Float = { 1f },
-    close: NestedScrollConnection? = null
+    close: NestedScrollConnection? = null,
+    /** Goes up each time the grid must show the work profile's tile (Launcher.showAllAppsFromIntent with the WORK tab). */
+    workScroll: Int = 0
 ) {
     Box(
         modifier
@@ -188,6 +191,16 @@ fun AppsPanel(
                         grid.animateScrollToItem(tileIndex + blocks[itemToScrollTo].padding)
                     }
                     previousState = updatedState
+                }
+            }
+
+            // Launcher.showAllAppsWithSelectedTabFromIntent: mAppsView.switchToTab(WORK) -- here the grid scrolls to the work profile's tile, at once,
+            // as the private space's header is scrolled to above.
+            // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java#showAllAppsFromIntent)
+            val workTile = profiles.indexOfFirst { it.kind == ProfileKind.WORK }
+            LaunchedEffect(workScroll) {
+                if (workScroll > 0 && workTile >= 0) {
+                    grid.scrollToItem(blocks.take(workTile).fold(placed) { index, block -> index + block.padding + 1 + block.apps.size + block.extra } + blocks[workTile].padding)
                 }
             }
 
@@ -408,6 +421,8 @@ private fun PinnedCell(row: PinnedRow, iconSize: Dp, actions: HomeActions, seen:
             modifier = Modifier
                 .fillMaxWidth()
                 .then(launchSource.cell)
+                // The long click's label for TalkBack: the menu's one action (BubbleTextView.java#L535-L545, as the app cells).
+                .semantics { onLongClick(label = remove, action = null) }
                 .sinkClickable(row.pin.label, onLongClick = menu::open, onClick = { actions.launchPinned(row.pin, launchSource.getActivityLaunchOptions()) })
                 .padding(horizontal = 2.dp, vertical = CELL_PAD)
         ) {
@@ -446,6 +461,7 @@ private fun AppCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: M
     val description = entry.applyContentDescription()
     val scope = rememberCoroutineScope()
     var shortcuts by remember { mutableStateOf(emptyList<ShortcutInfo>()) }
+    val deepShortcut = stringResource(R.string.action_deep_shortcut)
     val info = stringResource(R.string.menu_app_info)
     val uninstall = stringResource(R.string.menu_uninstall)
     val hide = stringResource(R.string.menu_hide)
@@ -469,7 +485,10 @@ private fun AppCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: M
             modifier = Modifier
                 .fillMaxWidth()
                 .then(launchSource.cell)
-                .semantics { contentDescription = description }
+                // BubbleTextView.onInitializeAccessibilityNodeInfo adds the action's label for TalkBack; the long click opens the shortcut menu
+                // (R.string.action_deep_shortcut). The action itself is sinkClickable's: a label alone merges with it.
+                // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/BubbleTextView.java#L535-L545)
+                .semantics { contentDescription = description; onLongClick(label = deepShortcut, action = null) }
                 .sinkClickable(
                     label = description,
                     onLongClick = {

@@ -9,13 +9,23 @@ package com.yaz.launcher.feature.home
 // written for either axis and either way out: a drag the list cannot use moves the panel (onPostScroll), a drag back first
 // returns the panel to its open place (onPreScroll), and the fling settles the state (onPreFling, onPostFling).
 import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.max
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.unit.Velocity
@@ -80,6 +90,144 @@ internal fun successProgress(tablet: Boolean, fromApps: Boolean, toApps: Boolean
  */
 internal fun flingVelocityPx(pxPerDp: Float): Float = pxPerDp * 1000f
 
+/** BaseSwipeDetector.ANIMATION_DURATION, in ms. */
+private const val ANIMATION_DURATION = 1200f
+
+/**
+ * BaseSwipeDetector.calculateDuration: the settle's length, shorter for a faster release (`velocity` in px per ms) and for less travel left
+ * (`progressNeeded`, the share of the segment between two anchors); never under 100 ms. The original has no other clamp.
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/BaseSwipeDetector.java#calculateDuration)
+ */
+internal fun calculateDuration(velocity: Float, progressNeeded: Float): Long {
+    // TODO: make these values constants after tuning.
+    val velocityDivisor = max(2f, abs(0.5f * velocity))
+    val travelDistance = max(0.2f, progressNeeded)
+    return max(100f, ANIMATION_DURATION / velocityDivisor * travelDistance).toLong()
+}
+
+/** Interpolators.FAST_FLING_PX_MS, the speed in px per ms over which a settle uses the quintic curve. */
+private const val FAST_FLING_PX_MS = 10f
+
+/** Interpolators.SCROLL. */
+private val SCROLL = Easing { t ->
+    val u = t - 1.0f
+    u * u * u * u * u + 1
+}
+
+/** Interpolators.SCROLL_CUBIC. */
+private val SCROLL_CUBIC = Easing { t ->
+    val u = t - 1.0f
+    u * u * u + 1
+}
+
+/**
+ * Interpolators.scrollInterpolatorForVelocity: the curve of the settle, `velocity` in px per ms.
+ * (https://github.com/LineageOS/android_frameworks_libs_systemui/blob/lineage-22.2/animationlib/src/com/android/app/animation/Interpolators.java#scrollInterpolatorForVelocity)
+ */
+internal fun scrollInterpolatorForVelocity(velocity: Float): Easing = if (abs(velocity) > FAST_FLING_PX_MS) SCROLL else SCROLL_CUBIC
+
+/**
+ * The animation after a release, as AbstractStateChangeTouchController.onDragEnd sets it: `duration = calculateDuration(velocity,
+ * endProgress - progress)` (the share of the segment left to [target]; none when it is already there) with `scrollInterpolatorForVelocity`
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/AbstractStateChangeTouchController.java#onDragEnd).
+ * [velocityPxPerSecond] is Compose's (px per second); the detector's is px per ms (computeCurrentVelocity(1000) / 1000). The segment is the one
+ * between the anchors around the offset; on an anchor, the way to [target].
+ */
+internal fun <T> AnchoredDraggableState<T>.settleSpec(target: T, velocityPxPerSecond: Float): AnimationSpec<Float> {
+    val velocity = velocityPxPerSecond / 1000f
+    val offset = offsetOrZero()
+    val lowAt = anchors.closestAnchor(offset, false)?.let { anchors.positionOf(it) } ?: offset
+    val highAt = anchors.closestAnchor(offset, true)?.let { anchors.positionOf(it) } ?: offset
+    val left = abs(anchors.positionOf(target) - offset)
+    val segment = if (lowAt == highAt) left else abs(highAt - lowAt)
+    val progressNeeded = if (segment == 0f || left.isNaN()) 0f else left / segment
+    val duration = if (progressNeeded <= 0f) 0L else calculateDuration(velocity, progressNeeded)
+    return tween(duration.toInt(), easing = scrollInterpolatorForVelocity(velocity))
+}
+
+internal const val DIRECTION_POSITIVE = 1 shl 0
+internal const val DIRECTION_NEGATIVE = 1 shl 1
+internal const val DIRECTION_BOTH = DIRECTION_NEGATIVE or DIRECTION_POSITIVE
+
+/** SingleAxisSwipeDetector.Direction, VERTICAL and HORIZONTAL (positive is up and right). */
+internal enum class Direction {
+    VERTICAL, HORIZONTAL;
+
+    fun isPositive(displacement: Float): Boolean = if (this == VERTICAL) displacement < 0 else displacement > 0
+
+    fun isNegative(displacement: Float): Boolean = if (this == VERTICAL) displacement > 0 else displacement < 0
+
+    /** Returns the part of the given point that is relevant to this direction. */
+    fun extractDirection(direction: Offset): Float = if (this == VERTICAL) direction.y else direction.x
+
+    fun extractOrthogonalDirection(direction: Offset): Float = if (this == VERTICAL) direction.x else direction.y
+}
+
+/**
+ * SingleAxisSwipeDetector.shouldScrollStart: a drag along [mDir] starts only once its displacement along the axis passes the touch slop
+ * (times [mTouchSlopMultiplier]) and the displacement across it, and the way is one the client wants ([mScrollDirections]); a diagonal swipe
+ * starts nothing along an axis it does not follow.
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/SingleAxisSwipeDetector.java#shouldScrollStart)
+ */
+internal fun shouldScrollStart(
+    mDir: Direction,
+    displacement: Offset,
+    mTouchSlop: Float,
+    mScrollDirections: Int = DIRECTION_BOTH,
+    mTouchSlopMultiplier: Float = 1f
+): Boolean {
+    // Reject cases where the angle or slop condition is not met.
+    val minDisplacement = max(mTouchSlop * mTouchSlopMultiplier, abs(mDir.extractOrthogonalDirection(displacement)))
+    if (abs(mDir.extractDirection(displacement)) < minDisplacement) {
+        return false
+    }
+
+    // Check if the client is interested in scroll in current direction.
+    val displacementComponent = mDir.extractDirection(displacement)
+    return canScrollNegative(mScrollDirections, mDir, displacementComponent) || canScrollPositive(mScrollDirections, mDir, displacementComponent)
+}
+
+private fun canScrollNegative(mScrollDirections: Int, mDir: Direction, displacement: Float): Boolean =
+    (mScrollDirections and DIRECTION_NEGATIVE) > 0 && mDir.isNegative(displacement)
+
+private fun canScrollPositive(mScrollDirections: Int, mDir: Direction, displacement: Float): Boolean =
+    (mScrollDirections and DIRECTION_POSITIVE) > 0 && mDir.isPositive(displacement)
+
+/** Draggable.kt's HorizontalAngleUpperBounds: foundation's nested draggables give a drag to the horizontal one up to 30 degrees from the x axis, else to the vertical one. */
+private const val HORIZONTAL_ANGLE_UPPER_BOUNDS = 30
+
+/**
+ * Keeps a swipe to its axis while nothing is open. Foundation's nested draggables (the side panels' horizontal one, the bottom panel's vertical
+ * one) split a drag at 30 degrees from the x axis; Trebuchet's detectors ask [shouldScrollStart], which needs the along displacement to reach
+ * the across one (45 degrees). In between, a drag the vertical draggable would take but [shouldScrollStart] refuses is consumed on the Initial
+ * pass, so no draggable has it: it starts when the finger comes out of that band, as BaseSwipeDetector.onTouchEvent tests shouldScrollStart on
+ * every ACTION_MOVE until the drag starts (and keeps the drag once started: the gate then lets everything through). The events are otherwise
+ * left alone. [active] is read when the finger goes down.
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/BaseSwipeDetector.java#onTouchEvent)
+ */
+internal fun Modifier.singleAxisSwipeGate(active: () -> Boolean): Modifier = pointerInput(Unit) {
+    val mTouchSlop = viewConfiguration.touchSlop
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val mDownPos = down.position
+        var idle = active()
+        // BaseSwipeDetector.mState: DRAGGING once the drag may start.
+        var dragging = false
+        do {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (idle && !dragging && event.changes.size == 1) {
+                val mDisplacement = change.position - mDownPos
+                val angle = atan2(abs(mDisplacement.y), abs(mDisplacement.x)) * (180f / PI.toFloat())
+                val mDir = if (angle <= HORIZONTAL_ANGLE_UPPER_BOUNDS) Direction.HORIZONTAL else Direction.VERTICAL
+                if (abs(mDir.extractDirection(mDisplacement)) > mTouchSlop) {
+                    if (shouldScrollStart(mDir, mDisplacement, mTouchSlop)) dragging = true else change.consume()
+                }
+            }
+        } while (change.pressed)
+    }
+}
+
 /**
  * Where a release ends, after AbstractStateChangeTouchController.onDragEnd (the same file as [successProgress]): the transition runs between
  * two neighbouring anchors, `from` (the state the drag started in) and `to`. A fling (faster than [flingVelocity], px/s) goes to `to` if it
@@ -121,8 +269,8 @@ internal fun <T> AnchoredDraggableState<T>.releaseTarget(velocity: Float, flingV
 }
 
 /**
- * The fling of the two panel states: [releaseTarget]'s end reached on [spec] from the finger's velocity (Trebuchet's onDragEnd animates the
- * progress from where it is to the end; the spring is the panels' own). A FlingBehavior is Compose's hook of Modifier.anchoredDraggable
+ * The fling of the two panel states: [releaseTarget]'s end reached on [settleSpec] (Trebuchet's onDragEnd animates the progress from where
+ * it is to the end, for a duration the velocity and the travel left give). A FlingBehavior is Compose's hook of Modifier.anchoredDraggable
  * (https://developer.android.com/develop/ui/compose/touch-input/pointer-input/drag-swipe-fling); its body follows foundation's
  * snapFlingBehavior, which also runs `animate` and moves the offset by `scrollBy`
  * (https://github.com/androidx/androidx/blob/androidx-main/compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/gestures/snapping/SnapFlingBehavior.kt).
@@ -131,14 +279,14 @@ internal fun <T> AnchoredDraggableState<T>.releaseTarget(velocity: Float, flingV
 internal fun <T> releaseFlingBehavior(
     state: AnchoredDraggableState<T>,
     flingVelocity: Float,
-    success: (from: T, to: T) -> Float,
-    spec: AnimationSpec<Float>
+    success: (from: T, to: T) -> Float
 ): FlingBehavior = object : FlingBehavior {
     override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
         val start = state.requireOffset()
-        val end = state.anchors.positionOf(state.releaseTarget(initialVelocity, flingVelocity, success))
+        val target = state.releaseTarget(initialVelocity, flingVelocity, success)
+        val end = state.anchors.positionOf(target)
         var last = start
-        animate(start, end, initialVelocity, spec) { value, _ ->
+        animate(start, end, initialVelocity, state.settleSpec(target, initialVelocity)) { value, _ ->
             scrollBy(value - last)
             last = value
         }
@@ -154,11 +302,10 @@ internal fun AnchoredDraggableState<Side>.closeWithScroll(
     open: Side,
     flingVelocity: Float,
     success: (from: Side, to: Side) -> Float,
-    spec: AnimationSpec<Float>,
     gridAtEdge: () -> Boolean
 ): NestedScrollConnection =
     // The panel closes towards its edge: to the right for the right panel (+1), to the left for the left one (-1).
-    closeConnection(open, if (open == Side.RIGHT) 1f else -1f, vertical = false, flingVelocity = flingVelocity, success = success, spec = spec, gridAtEdge = gridAtEdge)
+    closeConnection(open, if (open == Side.RIGHT) 1f else -1f, vertical = false, flingVelocity = flingVelocity, success = success, gridAtEdge = gridAtEdge)
 
 /**
  * Closes the Apps panel open at the bottom with the drag the vertical grid leaves over: the grid at its top cannot go further down, so the
@@ -169,9 +316,8 @@ internal fun AnchoredDraggableState<Side>.closeWithScroll(
 internal fun AnchoredDraggableState<Sheet>.closeWithScrollDown(
     flingVelocity: Float,
     success: (from: Sheet, to: Sheet) -> Float,
-    spec: AnimationSpec<Float>,
     gridAtEdge: () -> Boolean
-): NestedScrollConnection = closeConnection(Sheet.OPEN, 1f, vertical = true, flingVelocity = flingVelocity, success = success, spec = spec, gridAtEdge = gridAtEdge)
+): NestedScrollConnection = closeConnection(Sheet.OPEN, 1f, vertical = true, flingVelocity = flingVelocity, success = success, gridAtEdge = gridAtEdge)
 
 // The connection of Material 3's ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection (SheetDefaults.kt, vertical and closing downwards there): [vertical] picks the
 // axis, [out] the sign of the way out (+1 down or right, -1 left), [open] and [closed] the two places of the state.
@@ -186,7 +332,6 @@ private fun <T> AnchoredDraggableState<T>.closeConnection(
     vertical: Boolean,
     flingVelocity: Float,
     success: (from: T, to: T) -> Float,
-    spec: AnimationSpec<Float>,
     gridAtEdge: () -> Boolean
 ): NestedScrollConnection = object : NestedScrollConnection {
 
@@ -208,9 +353,10 @@ private fun <T> AnchoredDraggableState<T>.closeConnection(
     // for the animation, and Trebuchet's AbstractStateChangeTouchController.onDragEnd for the end: Trebuchet's fling speed (1 dp per ms) goes the
     // way it points, any other release commits by the share of the travel passed ([releaseTarget], [successProgress]), where it used the
     // platform's minimum fling and the nearest anchor. The state is built without specs (its snapAnimationSpec is never set and throws):
-    // the caller's spring is passed in.
+    // the spec is [settleSpec], the duration Trebuchet's BaseSwipeDetector.calculateDuration gives for the velocity and the travel left.
     private suspend fun settleWith(velocity: Float) {
-        animateTo(releaseTarget(velocity, flingVelocity, success), spec)
+        val target = releaseTarget(velocity, flingVelocity, success)
+        animateTo(target, settleSpec(target, velocity))
     }
 
     private fun partlyClosed(): Boolean = (offsetOrZero() - openAt) * out > 0f

@@ -35,6 +35,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -134,6 +135,7 @@ private fun RecentCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen
             actions.removeFromRecents(entry)
         }
     }
+    val options = stringResource(R.string.menu_options)
     val remove = stringResource(R.string.menu_remove_recent)
     val stop = stringResource(R.string.menu_force_stop)
     val hide = stringResource(R.string.menu_hide)
@@ -161,7 +163,9 @@ private fun RecentCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen
                 .fillMaxWidth()
                 .anchoredDraggable(drag, Orientation.Vertical)
                 .then(launchSource.cell)
-                .semantics { contentDescription = description }
+                // The long click's label for TalkBack, as BubbleTextView.onInitializeAccessibilityNodeInfo gives an app's one; the action is
+                // sinkClickable's (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/BubbleTextView.java#L535-L545).
+                .semantics { contentDescription = description; onLongClick(label = options, action = null) }
                 .sinkClickable(label = description, onLongClick = menu::open, onClick = { actions.launchFrom(entry, launchSource.getActivityLaunchOptions()) })
                 .padding(horizontal = 2.dp, vertical = CELL_PAD)
         ) {

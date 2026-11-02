@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Ported from Store (YAZ/Store at HEAD, app/src/main/AndroidManifest.xml), itself from Calculator (https://github.com/213YaZ786/Calculator, app/src/main/AndroidManifest.xml).
-     The home activity follows Trebuchet's (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/AndroidManifest.xml):
-     HOME and DEFAULT, singleTask, clearTaskOnLaunch, stateNotNeeded. -->
+     The home activity follows Trebuchet's (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/AndroidManifest.xml#L50-L75):
+     HOME and DEFAULT, singleTask, clearTaskOnLaunch, stateNotNeeded, resumeWhilePausing, an empty taskAffinity, and SHOW_WORK_APPS in the
+     HOME filter (Launcher.onNewIntent also takes ALL_APPS, which Trebuchet's manifest does not list: the system sends it to the home app). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
@@ -65,9 +66,12 @@
             android:launchMode="singleTask"
             android:stateNotNeeded="true"
             android:excludeFromRecents="true"
+            android:resumeWhilePausing="true"
+            android:taskAffinity=""
             android:clearTaskOnLaunch="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
+                <action android:name="android.intent.action.SHOW_WORK_APPS" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
