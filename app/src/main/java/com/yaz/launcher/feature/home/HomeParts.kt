@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -40,8 +41,12 @@ import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
+import com.yaz.launcher.LocalSystemUiController
+import com.yaz.launcher.LocalWallpaperColorHints
 import com.yaz.launcher.R
+import com.yaz.launcher.SystemUiController
 import com.yaz.launcher.data.apps.AppEntry
+import com.yaz.launcher.supportsDarkText
 import com.yaz.launcher.data.apps.LaunchSource
 import com.yaz.launcher.data.apps.ProfileInfo
 import com.yaz.launcher.data.settings.IconShape
@@ -260,6 +265,35 @@ data class HomeActions(
     /** Opens the notification shade (a swipe down on the home screen). */
     val openNotifications: () -> Unit = {}
 )
+
+/**
+ * AllAppsTransitionController.setProgress and its constructor's mNavScrimFlag (Apache-2.0)
+ * https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/AllAppsTransitionController.java#setProgress
+ * and Launcher.java (UI_STATE_BASE_WINDOW from Themes.getActivityThemeRes's supportsDarkText of the WallpaperColorHints)
+ * https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java#L590
+ * The icons of the status and navigation bars: the base window state follows the wallpaper ([supportsDarkText]), and while a panel has a
+ * scrim ([hasScrim], the panel out) UI_STATE_ALL_APPS gives the bars the panel's theme, mNavScrimFlag (a dark theme, [isMainColorDark], gets
+ * FLAG_DARK_NAV, else FLAG_LIGHT_NAV), 0 when it closes. Differences: the status bar follows the nav bar's flag; the base state is put back
+ * to the theme on leaving the home screen; nothing without an activity (previews).
+ */
+@Composable
+internal fun HomeSystemBars(hasScrim: Boolean, isMainColorDark: Boolean) {
+    val systemUiController = LocalSystemUiController.current ?: return
+    val wallpaperColorHints = LocalWallpaperColorHints.current
+    val mNavScrimFlag = if (isMainColorDark) {
+        SystemUiController.FLAG_DARK_NAV or SystemUiController.FLAG_DARK_STATUS
+    } else {
+        SystemUiController.FLAG_LIGHT_NAV or SystemUiController.FLAG_LIGHT_STATUS
+    }
+    DisposableEffect(wallpaperColorHints, isMainColorDark) {
+        systemUiController.updateUiState(SystemUiController.UI_STATE_BASE_WINDOW, supportsDarkText(wallpaperColorHints))
+        onDispose { systemUiController.updateUiState(SystemUiController.UI_STATE_BASE_WINDOW, !isMainColorDark) }
+    }
+    DisposableEffect(hasScrim, mNavScrimFlag) {
+        systemUiController.updateUiState(SystemUiController.UI_STATE_ALL_APPS, if (hasScrim) mNavScrimFlag else 0)
+        onDispose { systemUiController.updateUiState(SystemUiController.UI_STATE_ALL_APPS, 0) }
+    }
+}
 
 // A pinned activity with the app it belongs to, whose icon its cell shows: ActivityManager's shortcut is the activity's own
 // icon and label (https://github.com/sdex/ActivityManager/blob/main/app/src/main/java/com/sdex/activityrunner/shortcut/ShortcutManager.kt).

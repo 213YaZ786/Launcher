@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /** Every launcher activity of every profile, once [loaded]. */
 data class AppsState(
@@ -46,6 +47,10 @@ class AppsRepository(
 ) {
     private val app = context.applicationContext
     private val launcherApps: LauncherApps = app.getSystemService(LauncherApps::class.java)
+
+    // BaseIconFactory.getNormalizer: one IconNormalizer for the loads, which run on one thread ([model]); the bitmap size is the largest icon
+    // the panel draws, 72 dp, where Trebuchet's is the grid's icon size (DeviceProfile.iconSizePx).
+    private val normalizer by lazy { IconNormalizer((MAX_ICON_DP * app.resources.displayMetrics.density).roundToInt()) }
 
     private val _state = MutableStateFlow(AppsState())
     val state: StateFlow<AppsState> = _state.asStateFlow()
@@ -175,7 +180,7 @@ class AppsRepository(
                         user = profile.user,
                         userSerial = profile.serial,
                         profile = profile.kind,
-                        icon = IconLayers.of(info.getIcon(0), badge),
+                        icon = IconLayers.of(info.getIcon(0), badge, normalizer),
                         stamp = stamp,
                         runtimeStatusFlags = runtimeStatusFlags,
                         contentDescription = contentDescription
@@ -253,6 +258,9 @@ class AppsRepository(
     private companion object {
         /** The badge picture's side in pixels: the badge is a part of it, drawn over an icon of 56 dp or so. */
         const val BADGE_PX = 160
+
+        /** The largest icon the apps panel draws, in dp (AppsPanel's coerceIn(44.dp, 72.dp)). */
+        const val MAX_ICON_DP = 72
 
         /** BaseIconCache.IDENTITY_FORMAT_STRING. */
         const val IDENTITY_FORMAT_STRING = "%1\$s"

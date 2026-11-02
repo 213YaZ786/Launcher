@@ -473,11 +473,14 @@ private fun AppCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: M
                 .sinkClickable(
                     label = description,
                     onLongClick = {
-                        // The shortcuts are asked when the menu opens, off the main thread (a refusal or another home app gives none).
-                        scope.launch {
-                            shortcuts = actions.shortcuts(entry)
-                            menu.open()
-                        }
+                        // PopupPopulator.createUpdateRunnable
+                        // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/popup/PopupPopulator.java#createUpdateRunnable):
+                        // the container opens at once with its fixed items, the runnable queries the shortcuts on the model's worker thread
+                        // (sorted and cut by sortAndFilterShortcuts inside the query) and posts them to the views on the UI handler when they
+                        // arrive; they sit at the head of the menu (a refusal or another home app gives none).
+                        shortcuts = emptyList()
+                        menu.open()
+                        scope.launch { shortcuts = actions.shortcuts(entry) }
                     },
                     onClick = { actions.launchFrom(entry, launchSource.getActivityLaunchOptions()) }
                 )

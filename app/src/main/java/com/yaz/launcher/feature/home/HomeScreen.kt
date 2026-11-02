@@ -77,6 +77,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
@@ -382,6 +383,8 @@ fun HomeContent(
         }
     }
     val anyOpen = side.targetValue != Side.CLOSED || sheet.targetValue != Sheet.CLOSED
+    // The bars' icons follow the wallpaper, and the panel's theme while a panel is out.
+    HomeSystemBars(hasScrim = anyOpen, isMainColorDark = MaterialTheme.colorScheme.background.luminance() < 0.5f)
     // Back on the home screen does nothing: Trebuchet's Launcher.onBackPressed hands Back to its callbacks, ends in the state handler and
     // never calls finish() (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java).
     // Handlers declared later win, so this one, always on, is declared first and the panel's below takes Back while a panel is open.
