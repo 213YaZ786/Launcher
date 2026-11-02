@@ -9,9 +9,11 @@ package com.yaz.launcher.data.notify
 import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
+import android.os.Process
 import android.os.UserHandle
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
+import android.service.notification.StatusBarNotification
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,9 +42,78 @@ object NotificationDots {
     @Volatile
     internal var connected = false
 
-    internal fun publish(dots: Set<DotKey>, counts: Map<String, Int> = emptyMap()) {
-        _keys.value = dots
-        _counts.value = counts
+    /** PopupDataProvider.mPackageUserToDotInfos: the dot of each app in each profile, with the keys of the notifications it stands for. */
+    private val packageUserToDotInfos = HashMap<DotKey, DotInfo>()
+
+    /**
+     * PopupDataProvider.updateNotificationDots: the flows publish the apps with a dot and their counts. Called only when a package's dot
+     * changed (a key added, removed or given a new count), where Trebuchet hands the changed keys to the views that redraw them.
+     */
+    private fun updateNotificationDots() {
+        val mine = Process.myUserHandle()
+        _keys.value = packageUserToDotInfos.keys.toSet()
+        // The count of a package: its owner's notifications, each Notification.number or 1 (DotInfo's total).
+        _counts.value = packageUserToDotInfos.filterKeys { it.user == mine }.entries.associate { (key, dot) -> key.packageName to dot.totalCount }
+    }
+
+    /**
+     * PopupDataProvider.onNotificationPosted
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/popup/PopupDataProvider.java).
+     * Called on the listener's worker thread; the lock keeps the map whole.
+     */
+    @Synchronized
+    internal fun onNotificationPosted(postedPackageUserKey: DotKey, notificationKey: NotificationKeyData) {
+        var dotInfo = packageUserToDotInfos[postedPackageUserKey]
+        if (dotInfo == null) {
+            dotInfo = DotInfo()
+            packageUserToDotInfos[postedPackageUserKey] = dotInfo
+        }
+        if (dotInfo.addOrUpdateNotificationKey(notificationKey)) {
+            updateNotificationDots()
+        }
+    }
+
+    /** PopupDataProvider.onNotificationRemoved. */
+    @Synchronized
+    internal fun onNotificationRemoved(removedPackageUserKey: DotKey, notificationKey: NotificationKeyData) {
+        val oldDotInfo = packageUserToDotInfos[removedPackageUserKey]
+        if (oldDotInfo != null && oldDotInfo.removeNotificationKey(notificationKey)) {
+            if (oldDotInfo.getNotificationKeys().isEmpty()) {
+                packageUserToDotInfos.remove(removedPackageUserKey)
+            }
+            updateNotificationDots()
+        }
+    }
+
+    /** PopupDataProvider.onNotificationFullRefresh: the dots are made again from [activeNotifications], published if one differs. */
+    @Synchronized
+    internal fun onNotificationFullRefresh(activeNotifications: List<StatusBarNotification>) {
+        // This will contain the DotKeys which have updated dots.
+        val updatedDots = HashMap(packageUserToDotInfos)
+        packageUserToDotInfos.clear()
+        for (notification in activeNotifications) {
+            val packageUserKey = DotKey(notification.packageName, notification.user)
+            var dotInfo = packageUserToDotInfos[packageUserKey]
+            if (dotInfo == null) {
+                dotInfo = DotInfo()
+                packageUserToDotInfos[packageUserKey] = dotInfo
+            }
+            dotInfo.addOrUpdateNotificationKey(NotificationKeyData.fromNotification(notification))
+        }
+
+        // Add and remove from updatedDots so it contains the DotKeys of updated dots.
+        for (packageUserKey in packageUserToDotInfos.keys) {
+            val prevDot = updatedDots[packageUserKey]
+            val newDot = packageUserToDotInfos.getValue(packageUserKey)
+            if (prevDot == null || prevDot.totalCount != newDot.totalCount) {
+                updatedDots[packageUserKey] = newDot
+            } else {
+                // No need to update the dot if it already existed (no visual change).
+                updatedDots.remove(packageUserKey)
+            }
+        }
+
+        if (updatedDots.isNotEmpty()) updateNotificationDots()
     }
 
     /** The listener, as the manifest declares it. */

@@ -20,9 +20,11 @@ package com.yaz.launcher.feature.home
 // - The stateful part answers the panels with AppActions and AppShortcuts (Trebuchet's ActivityContext.startActivitySafely and
 //   PopupPopulator, https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/popup/PopupPopulator.java).
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
@@ -108,7 +110,9 @@ import androidx.compose.ui.unit.dp
 import com.yaz.launcher.R
 import com.yaz.launcher.data.apps.AppActions
 import com.yaz.launcher.data.apps.AppActivities
+import com.yaz.launcher.data.apps.AppEntry
 import com.yaz.launcher.data.apps.AppShortcuts
+import com.yaz.launcher.data.apps.LaunchSource
 import com.yaz.launcher.data.apps.LauncherModel
 import com.yaz.launcher.data.apps.LauncherState
 import com.yaz.launcher.data.store.StoreMarks
@@ -119,6 +123,7 @@ import com.yaz.launcher.data.settings.ThemeMode
 import com.yaz.launcher.feature.settings.SettingsIcons
 import com.yaz.launcher.feature.setup.GuideScreen
 import com.yaz.launcher.ui.component.EdgeTab
+import com.yaz.launcher.ui.component.Haptics
 import com.yaz.launcher.ui.component.PillItem
 import com.yaz.launcher.ui.component.PillMenu
 import com.yaz.launcher.ui.component.PillMotion
@@ -140,7 +145,7 @@ import org.koin.compose.koinInject
  * Activities screen of a package.
  */
 @Composable
-fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, onSettings: () -> Unit = {}, onActivities: (String) -> Unit = {}) {
+fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSignal: Int = 0, onSettings: () -> Unit = {}, onActivities: (String) -> Unit = {}) {
     val model: LauncherModel = koinInject()
     val store: SettingsStore = koinInject()
     val state by model.state.collectAsState()
@@ -156,7 +161,8 @@ fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, onSettings: ()
     }
     val actions = remember(model, store, context) {
         HomeActions(
-            launch = { entry -> if (!AppActions.launch(context, ComponentName(entry.packageName, entry.className), entry.user)) haptics.reject() },
+            launch = { entry -> onClickAppShortcut(null, entry, context, haptics) },
+            launchFrom = { entry, source -> onClickAppShortcut(source, entry, context, haptics) },
             appInfo = { entry -> if (!AppActions.appInfo(context, ComponentName(entry.packageName, entry.className), entry.user)) haptics.reject() },
             uninstall = { entry -> if (!AppActions.uninstall(context, ComponentName(entry.packageName, entry.className), entry.user)) haptics.reject() },
             shortcuts = { entry ->
@@ -187,7 +193,14 @@ fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, onSettings: ()
             refresh = model::refresh,
             hide = { entry -> model.hide(entry.packageName) },
             openActivities = { entry -> onActivities(entry.packageName) },
-            launchPinned = { pin -> if (!AppActivities.launch(context, ComponentName(pin.packageName, pin.className))) haptics.reject() },
+            // A pinned activity that cannot start says so as startActivitySafely does ("Toast.makeText(context, R.string.activity_not_found, ...)",
+            // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/ActivityContext.java#L456-L461).
+            launchPinned = { pin, source ->
+                if (!AppActivities.launch(context, ComponentName(pin.packageName, pin.className), source)) {
+                    Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
+                    haptics.reject()
+                }
+            },
             unpin = { pin -> store.update { it.copy(pinned = it.pinned - pin) } },
             openPackage = { packageName -> if (!launchPackage(context, packageName)) haptics.reject() },
             openNotifications = { if (!expandNotificationShade(context)) haptics.reject() }
@@ -221,8 +234,23 @@ fun HomeScreen(homeSignal: Int = 0, homeAnimated: Boolean = true, onSettings: ()
     HomeContent(
         state, settings.themeMode, actions, panelOpacity = settings.panelOpacity, iconShape = settings.iconShape, themedIcons = settings.themedIcons,
         edgeTabs = settings.edgeTabs, marks = AppMarks(dots, updates), pinned = pinned, layout = layout, homeSignal = homeSignal, homeAnimated = homeAnimated,
-        swipeDown = settings.swipeDown, dateMode = settings.dateMode
+        screenOffSignal = screenOffSignal, swipeDown = settings.swipeDown, dateMode = settings.dateMode
     )
+}
+
+// ItemClickHandler.onClickAppShortcut and startAppShortcutOrInfoActivity, as they run for an app of the list
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/ItemClickHandler.java#L355-L399):
+// [v] is the tapped cell, [launcher] the context; the toast of a failed start is ActivityContext.startActivitySafely's.
+private fun onClickAppShortcut(v: LaunchSource?, shortcut: AppEntry, launcher: Context, haptics: Haptics) {
+    if (shortcut.isDisabled() && AppActions.handleDisabledItemClicked(shortcut, launcher)) {
+        return
+    }
+    // Start activities
+    startAppShortcutOrInfoActivity(v, shortcut, launcher, haptics)
+}
+
+private fun startAppShortcutOrInfoActivity(v: LaunchSource?, item: AppEntry, launcher: Context, haptics: Haptics) {
+    if (!AppActions.startActivitySafely(launcher, ComponentName(item.packageName, item.className), item.user, v)) haptics.reject()
 }
 
 /** Stateless, so a test draws it with fixed data; [initial] is the edge whose panel is open at the start. */
@@ -250,6 +278,8 @@ fun HomeContent(
     homeSignal: Int = 0,
     /** False when the system brought the home to the front: the panels then close at once (Trebuchet's alreadyOnHome). */
     homeAnimated: Boolean = true,
+    /** Goes up each time the screen goes off: the panels close at once and the menus close (Trebuchet's Launcher.onScreenOnChanged); the routes stay. */
+    screenOffSignal: Int = 0,
     /** What a swipe down on the wallpaper does. */
     swipeDown: SwipeDown = SwipeDown.NOTHING,
     /** The calendar of the header shown over the open panels. */
@@ -333,6 +363,14 @@ fun HomeContent(
             }
         }
     }
+    // Launcher.onScreenOnChanged: "if (!isOn ...) mStateManager.goToState(NORMAL)", at once: nobody sees the panel close
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java#L2144-L2153).
+    LaunchedEffect(screenOffSignal) {
+        if (screenOffSignal > 0) {
+            side.snapTo(Side.CLOSED)
+            sheet.snapTo(Sheet.CLOSED)
+        }
+    }
     val anyOpen = side.targetValue != Side.CLOSED || sheet.targetValue != Sheet.CLOSED
     // Back on the home screen does nothing: Trebuchet's Launcher.onBackPressed hands Back to its callbacks, ends in the state handler and
     // never calls finish() (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java).
@@ -360,11 +398,12 @@ fun HomeContent(
     val panelActions = remember(actions) {
         actions.copy(
             launch = { actions.launch(it); close() },
+            launchFrom = { entry, source -> actions.launchFrom(entry, source); close() },
             appInfo = { actions.appInfo(it); close() },
             startShortcut = { actions.startShortcut(it); close() },
             openStore = { actions.openStore(); close() },
             openActivities = { actions.openActivities(it); close() },
-            launchPinned = { actions.launchPinned(it); close() },
+            launchPinned = { pin, source -> actions.launchPinned(pin, source); close() },
             openSettings = { actions.openSettings(); close() },
             openPackage = { actions.openPackage(it); close() }
         )
@@ -397,6 +436,10 @@ fun HomeContent(
 
     // The menu of a long press on the wallpaper: Wallpaper and Settings, as Trebuchet's OptionsPopupView.getOptions lists them.
     val wallpaperMenu = rememberPillMenu()
+    // Launcher.onNewIntent: closeAllOpenViewsExcept, the menu of a long press on the wallpaper closes when Home is pressed (or the screen turns off).
+    LaunchedEffect(homeSignal, screenOffSignal) {
+        if (homeSignal > 0 || screenOffSignal > 0) wallpaperMenu.close()
+    }
     val wallpaperItems = listOf(
         PillItem(SettingsIcons.Palette, stringResource(R.string.menu_wallpaper), PillMotion.BOUNCE) { actions.openWallpaper() },
         PillItem(AppIcons.Settings, stringResource(R.string.menu_settings), PillMotion.WIGGLE) { actions.openSettings() }
@@ -408,7 +451,9 @@ fun HomeContent(
     CompositionLocalProvider(
         LocalContentColor provides MaterialTheme.colorScheme.onSurface,
         LocalIconStyle provides IconStyle(iconShape, themedIcons),
-        LocalAppMarks provides marks
+        LocalAppMarks provides marks,
+        LocalHomeSignal provides homeSignal,
+        LocalScreenOffSignal provides screenOffSignal
     ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val margin = 12.dp

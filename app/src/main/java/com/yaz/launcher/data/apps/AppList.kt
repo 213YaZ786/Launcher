@@ -23,6 +23,21 @@ object AppList {
     fun <T : Listed> updatePackage(list: List<T>, packageName: String, userSerial: Long, fresh: List<T>): List<T> =
         removePackage(list, packageName, userSerial) + fresh.filter { it.packageName == packageName && it.userSerial == userSerial }.distinctBy { it.key }
 
+    /**
+     * AllAppsList.updateDisabledFlags (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/AllAppsList.java#L283-L292):
+     * "Updates the disabled flags of apps matching {@param matcher} based on {@param op}." The entries are immutable, so a matching one is
+     * replaced by a copy with its new runtimeStatusFlags (same icon layers); [op] is a FlagOp, here a function of the old flags.
+     */
+    fun updateDisabledFlags(data: List<AppEntry>, matcher: (AppEntry) -> Boolean, op: (Int) -> Int): List<AppEntry> =
+        data.map { info ->
+            if (matcher(info)) {
+                val flags = op(info.runtimeStatusFlags)
+                if (flags == info.runtimeStatusFlags) info else info.copy(runtimeStatusFlags = flags)
+            } else {
+                info
+            }
+        }
+
     /** A profile that went: all its apps leave (UserCache's removal event, then the loader reloads without it). */
     fun <T : Listed> removeProfile(list: List<T>, userSerial: Long): List<T> = list.filterNot { it.userSerial == userSerial }
 

@@ -52,6 +52,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -282,16 +284,19 @@ internal fun <T> profileBlocks(placed: Int, rows: Int, apps: List<List<T>>): Lis
 @Composable
 private fun PinnedCell(row: PinnedRow, iconSize: Dp, actions: HomeActions, seen: MutableSet<String>, index: Int, modifier: Modifier = Modifier) {
     val menu = rememberPillMenu()
+    CloseOnHome(menu)
+    val launchSource = rememberLaunchSource()
     val remove = stringResource(R.string.menu_remove_shortcut)
     Box(modifier.entrancePop(seen, "pin/" + row.app.listKey() + row.pin.className, index).then(menu.tracker)) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .fillMaxWidth()
-                .sinkClickable(row.pin.label, onLongClick = menu::open, onClick = { actions.launchPinned(row.pin) })
+                .then(launchSource.cell)
+                .sinkClickable(row.pin.label, onLongClick = menu::open, onClick = { actions.launchPinned(row.pin, launchSource.getActivityLaunchOptions()) })
                 .padding(horizontal = 2.dp, vertical = CELL_PAD)
         ) {
-            AppIcon(row.app, iconSize)
+            AppIcon(row.app, iconSize, launchSource.iconBounds)
             CellLabel(row.pin.label)
         }
         PillMenu(menu, listOf(PillItem(AppIcons.Close, remove, PillMotion.DROP, danger = true) { actions.unpin(row.pin) }))
@@ -320,6 +325,10 @@ internal fun CellLabel(text: String) {
 @Composable
 private fun AppCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: MutableSet<String>, index: Int, modifier: Modifier = Modifier) {
     val menu = rememberPillMenu()
+    CloseOnHome(menu)
+    val launchSource = rememberLaunchSource()
+    // BubbleTextView.applyLabel: the label TalkBack reads, "Chrome, Work" for a work app, "Disabled ..." for a suspended one; the text drawn stays the label.
+    val description = entry.applyContentDescription()
     val scope = rememberCoroutineScope()
     var shortcuts by remember { mutableStateOf(emptyList<ShortcutInfo>()) }
     val info = stringResource(R.string.menu_app_info)
@@ -344,8 +353,10 @@ private fun AppCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: M
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .fillMaxWidth()
+                .then(launchSource.cell)
+                .semantics { contentDescription = description }
                 .sinkClickable(
-                    label = entry.label,
+                    label = description,
                     onLongClick = {
                         // The shortcuts are asked when the menu opens, off the main thread (a refusal or another home app gives none).
                         scope.launch {
@@ -353,11 +364,11 @@ private fun AppCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: M
                             menu.open()
                         }
                     },
-                    onClick = { actions.launch(entry) }
+                    onClick = { actions.launchFrom(entry, launchSource.getActivityLaunchOptions()) }
                 )
                 .padding(horizontal = 2.dp, vertical = CELL_PAD)
         ) {
-            AppIcon(entry, iconSize)
+            AppIcon(entry, iconSize, launchSource.iconBounds)
             CellLabel(entry.label)
         }
         PillMenu(menu, items)

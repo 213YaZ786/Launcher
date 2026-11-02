@@ -25,6 +25,10 @@
     <string name="menu_update_in_store">Update in Store</string>
     <string name="update_waiting">Update waiting</string>
     <string name="notification_dot">Has notifications</string>
+    <!-- Trebuchet's strings of the same names: a launch that fails, a disabled app, the label TalkBack reads for it -->
+    <string name="activity_not_found">App isn\'t installed.</string>
+    <string name="activity_not_available">App isn\'t available</string>
+    <string name="disabled_app_label">Disabled %1$s</string>
     <string name="notification_dots_service_title">Notification dots</string>
 
     <string name="menu_hide">Hide</string>

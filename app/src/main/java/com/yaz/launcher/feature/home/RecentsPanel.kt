@@ -34,6 +34,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -116,6 +118,10 @@ fun RecentsPanel(
 private fun RecentCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: MutableSet<String>, index: Int, modifier: Modifier = Modifier) {
     val haptics = rememberHaptics()
     val menu = rememberPillMenu()
+    CloseOnHome(menu)
+    val launchSource = rememberLaunchSource()
+    // BubbleTextView.applyLabel: the label TalkBack reads (the profile named, "Disabled ..." for a suspended app); the text drawn stays the label.
+    val description = entry.applyContentDescription()
     val drag = remember { AnchoredDraggableState(Dismiss.REST) }
     var height by remember { mutableIntStateOf(0) }
     // The anchors are set once the cell has a size: resting at 0, gone one cell height up (the recipe's onSizeChanged way).
@@ -154,10 +160,12 @@ private fun RecentCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen
             modifier = Modifier
                 .fillMaxWidth()
                 .anchoredDraggable(drag, Orientation.Vertical)
-                .sinkClickable(label = entry.label, onLongClick = menu::open, onClick = { actions.launch(entry) })
+                .then(launchSource.cell)
+                .semantics { contentDescription = description }
+                .sinkClickable(label = description, onLongClick = menu::open, onClick = { actions.launchFrom(entry, launchSource.getActivityLaunchOptions()) })
                 .padding(horizontal = 2.dp, vertical = CELL_PAD)
         ) {
-            AppIcon(entry, iconSize)
+            AppIcon(entry, iconSize, launchSource.iconBounds)
             Text(
                 entry.label,
                 style = MaterialTheme.typography.labelMedium,

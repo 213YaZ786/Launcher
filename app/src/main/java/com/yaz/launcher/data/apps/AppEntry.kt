@@ -31,7 +31,7 @@ val Listed.key: AppKey get() = AppKey(packageName, className, userSerial)
  * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/data/AppInfo.java):
  * component, user, title, icon; the profile's kind stands for its UserIconInfo.
  */
-class AppEntry(
+data class AppEntry(
     override val packageName: String,
     override val className: String,
     override val label: String,
@@ -44,11 +44,39 @@ class AppEntry(
      * What the icon was made from (the package's apk path, version, flags, the screen density): the same stamp means the same icon, so
      * the entry is kept and its layers with it (the caches of the screen read the layers by identity).
      */
-    val stamp: String = ""
+    val stamp: String = "",
+    /**
+     * ItemInfoWithIcon.runtimeStatusFlags (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/data/ItemInfoWithIcon.java):
+     * the FLAG_DISABLED_* bits that hold now (a suspended package, a paused or locked profile).
+     */
+    val runtimeStatusFlags: Int = 0,
+    /**
+     * ItemInfo.contentDescription: the label TalkBack reads, with the profile named ("Chrome, Work" style), made once when the entry loads
+     * (IconCache sets it from getUserBadgedLabel). [label] is what is drawn.
+     */
+    val contentDescription: String = label
 ) : Listed {
-    // The icon counts (by identity): a package updated with a new icon must reach the flow that shows it.
-    override fun equals(other: Any?): Boolean = other is AppEntry && key == other.key && label == other.label && icon === other.icon
+    // The icon counts (by identity): a package updated with a new icon must reach the flow that shows it. So do the disabled flags, so that
+    // a suspended app reaches the screen.
+    override fun equals(other: Any?): Boolean =
+        other is AppEntry && key == other.key && label == other.label && icon === other.icon &&
+            runtimeStatusFlags == other.runtimeStatusFlags && contentDescription == other.contentDescription
     override fun hashCode(): Int = 31 * key.hashCode() + label.hashCode()
+
+    // ItemInfoWithIcon.isDisabled (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/data/ItemInfoWithIcon.java#L160-L162).
+    fun isDisabled(): Boolean = (runtimeStatusFlags and FLAG_DISABLED_MASK) != 0
+
+    companion object {
+        // ItemInfoWithIcon's FLAG_DISABLED_SUSPENDED and FLAG_DISABLED_QUIET_USER, FLAG_DISABLED_MASK reduced to the two an app of the list can have
+        // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/data/ItemInfoWithIcon.java#L56-L111).
+        /** Indicates that the icon is disabled as the app is suspended. */
+        const val FLAG_DISABLED_SUSPENDED = 1 shl 2
+
+        /** Indicates that the icon is disabled as the user is in quiet mode. */
+        const val FLAG_DISABLED_QUIET_USER = 1 shl 3
+
+        const val FLAG_DISABLED_MASK = FLAG_DISABLED_SUSPENDED or FLAG_DISABLED_QUIET_USER
+    }
 }
 
 /**

@@ -1,11 +1,13 @@
 package com.yaz.launcher.data.apps
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.os.UserHandle
+import android.text.TextUtils
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +85,8 @@ class AppsRepository(
      * changed nothing makes no new state.
      */
     private fun loadAll(onlyChanged: Boolean) {
+        // BaseIconCache.updateSystemState: "mUserFormatString.clear()", the locale may have changed since the last load.
+        if (!onlyChanged) mUserFormatString.clear()
         val before = _state.value
         val profiles = Profiles.queryAll(app)
         val reload = if (onlyChanged && before.loaded) Profiles.changed(before.profiles, profiles) else null
@@ -121,10 +125,17 @@ class AppsRepository(
                 profile = profiles.firstOrNull { it.user == user } ?: continue
             }
             for (pkg in packages) {
-                apps = if (op == PackageOp.REMOVE) {
-                    AppList.removePackage(apps, pkg, profile.serial)
-                } else {
-                    AppList.updatePackage(apps, pkg, profile.serial, entriesOf(profile, pkg, previous))
+                apps = when (op) {
+                    PackageOp.REMOVE -> AppList.removePackage(apps, pkg, profile.serial)
+                    // PackageUpdatedTask OP_SUSPEND and OP_UNSUSPEND: FlagOp.NO_OP.setFlag(FLAG_DISABLED_SUSPENDED, mOp == OP_SUSPEND) on the items of the
+                    // packages (ItemInfoMatcher.ofPackages(packageSet, mUser)), then appsList.updateDisabledFlags(matcher, flagOp)
+                    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/PackageUpdatedTask.java#L174-L179).
+                    PackageOp.SUSPEND, PackageOp.UNSUSPEND -> AppList.updateDisabledFlags(
+                        apps,
+                        { info -> info.packageName == pkg && info.userSerial == profile.serial },
+                        { flags -> if (op == PackageOp.SUSPEND) flags or AppEntry.FLAG_DISABLED_SUSPENDED else flags and AppEntry.FLAG_DISABLED_SUSPENDED.inv() }
+                    )
+                    else -> AppList.updatePackage(apps, pkg, profile.serial, entriesOf(profile, pkg, previous))
                 }
             }
         }
@@ -150,9 +161,12 @@ class AppsRepository(
             runCatching {
                 val label = info.label.toString()
                 val stamp = stampOf(info)
+                val runtimeStatusFlags = disabledFlagsOf(info, profile)
+                val contentDescription = getUserBadgedLabel(label, profile.user).toString()
                 val kept = previous[AppKey(info.componentName.packageName, info.componentName.className, profile.serial)]
-                if (kept != null && kept.stamp == stamp && kept.label == label && kept.profile == profile.kind) {
-                    kept
+                if (kept != null && kept.stamp == stamp && kept.label == label && kept.profile == profile.kind && kept.contentDescription == contentDescription) {
+                    // The icon layers stay; the disabled flags are the ones read now.
+                    if (kept.runtimeStatusFlags == runtimeStatusFlags) kept else kept.copy(runtimeStatusFlags = runtimeStatusFlags)
                 } else {
                     AppEntry(
                         packageName = info.componentName.packageName,
@@ -162,7 +176,9 @@ class AppsRepository(
                         userSerial = profile.serial,
                         profile = profile.kind,
                         icon = IconLayers.of(info.getIcon(0), badge),
-                        stamp = stamp
+                        stamp = stamp,
+                        runtimeStatusFlags = runtimeStatusFlags,
+                        contentDescription = contentDescription
                     )
                 }
             }.getOrNull()
@@ -178,7 +194,47 @@ class AppsRepository(
      */
     private fun stampOf(info: LauncherActivityInfo): String {
         val application = info.applicationInfo
-        return "${application.sourceDir}|${application.splitSourceDirs?.joinToString(",")}|${application.flags}|${app.resources.configuration.densityDpi}"
+        // Without FLAG_SUSPENDED: a suspension changes the disabled flags only, never the icon (see [disabledFlagsOf]).
+        val flags = application.flags and ApplicationInfo.FLAG_SUSPENDED.inv()
+        return "${application.sourceDir}|${application.splitSourceDirs?.joinToString(",")}|$flags|${app.resources.configuration.densityDpi}"
+    }
+
+    /**
+     * The disabled flags an activity has when it is loaded: FLAG_DISABLED_SUSPENDED when its application is suspended
+     * (ApplicationInfo.FLAG_SUSPENDED), FLAG_DISABLED_QUIET_USER when its profile is paused or locked (UserManagerState.isUserQuiet, which
+     * PackageUpdatedTask OP_USER_AVAILABILITY_CHANGE sets on the user's items)
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/PackageUpdatedTask.java#L174-L190).
+     */
+    private fun disabledFlagsOf(info: LauncherActivityInfo, profile: ProfileInfo): Int {
+        var runtimeStatusFlags = 0
+        if (info.applicationInfo.flags and ApplicationInfo.FLAG_SUSPENDED != 0) runtimeStatusFlags = runtimeStatusFlags or AppEntry.FLAG_DISABLED_SUSPENDED
+        if (profile.quiet) runtimeStatusFlags = runtimeStatusFlags or AppEntry.FLAG_DISABLED_QUIET_USER
+        return runtimeStatusFlags
+    }
+
+    /** The format of each user's label, by the user's hash: null when the user's label is the label itself (BaseIconCache.mUserFormatString). */
+    private val mUserFormatString = HashMap<Int, String?>()
+
+    /**
+     * BaseIconCache.getUserBadgedLabel
+     * (https://github.com/LineageOS/android_frameworks_libs_systemui/blob/lineage-22.2/iconloaderlib/src/com/android/launcher3/icons/cache/BaseIconCache.java#L315-L328):
+     * the label as TalkBack should read it, "Chrome, Work" for an app of the work profile. The format is asked once per user:
+     * PackageManager.getUserBadgedLabel on "%1$s", null when it comes back unchanged.
+     */
+    private fun getUserBadgedLabel(label: CharSequence, user: UserHandle): CharSequence {
+        val key = user.hashCode()
+        val format: String?
+        if (!mUserFormatString.containsKey(key)) {
+            var asked: String? = app.packageManager.getUserBadgedLabel(IDENTITY_FORMAT_STRING, user).toString()
+            if (TextUtils.equals(IDENTITY_FORMAT_STRING, asked)) {
+                asked = null
+            }
+            mUserFormatString[key] = asked
+            format = asked
+        } else {
+            format = mUserFormatString[key]
+        }
+        return if (format == null) label else String.format(format, label)
     }
 
     /**
@@ -197,5 +253,8 @@ class AppsRepository(
     private companion object {
         /** The badge picture's side in pixels: the badge is a part of it, drawn over an icon of 56 dp or so. */
         const val BADGE_PX = 160
+
+        /** BaseIconCache.IDENTITY_FORMAT_STRING. */
+        const val IDENTITY_FORMAT_STRING = "%1\$s"
     }
 }

@@ -55,7 +55,7 @@ object Routes {
 // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java): every route above Home
 // is left, as popBackStack(route, inclusive = false) does (https://developer.android.com/guide/navigation/backstack#pop), the animation being the pop's.
 @Composable
-fun LauncherApp(homeSignal: Int = 0, homeAnimated: Boolean = true) {
+fun LauncherApp(homeSignal: Int = 0, homeAnimated: Boolean = true, screenOffSignal: Int = 0) {
     val nav = rememberNavController()
     val store: SettingsStore = koinInject()
     val settings by store.settings.collectAsState()
@@ -89,6 +89,7 @@ fun LauncherApp(homeSignal: Int = 0, homeAnimated: Boolean = true) {
             HomeScreen(
                 homeSignal = homeSignal,
                 homeAnimated = homeAnimated,
+                screenOffSignal = screenOffSignal,
                 onSettings = { nav.navigate(Routes.SETTINGS) },
                 onActivities = { nav.navigate(Routes.activities(it)) }
             )

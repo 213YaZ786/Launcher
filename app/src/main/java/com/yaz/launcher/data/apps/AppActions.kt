@@ -1,5 +1,6 @@
 package com.yaz.launcher.data.apps
 
+import android.app.ActivityOptions
 import android.app.WallpaperManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
@@ -12,6 +13,17 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.UserHandle
 import android.os.UserManager
+import android.view.Display
+import android.view.View
+import android.widget.Toast
+import com.yaz.launcher.R
+
+/**
+ * The tapped cell of a launch: the screen's host [view], the cell's [cell] bounds on the screen and its [icon]'s bounds in the window's pixels. They are
+ * the `v` and the icon's `bounds` that ActivityContext.getActivityLaunchOptions reads (a BubbleTextView and its icon drawable)
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/ActivityContext.java#L486-L507).
+ */
+class LaunchSource(val view: View, val cell: Rect, val icon: Rect)
 
 /**
  * What a tap or a long press on an app does: start it, open its App info, uninstall it. Each answers whether Android
@@ -28,6 +40,61 @@ object AppActions {
      */
     fun launch(context: Context, component: ComponentName, user: UserHandle, sourceBounds: Rect? = null, options: Bundle? = null): Boolean =
         guarded { context.getSystemService(LauncherApps::class.java).startMainActivity(component, user, sourceBounds, options) }
+
+    /**
+     * ActivityContext.getActivityLaunchOptions
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/ActivityContext.java#L486-L507):
+     * the launch grows out of the icon, "Launch from center of icon, not entire view": ActivityOptions.makeClipRevealAnimation with the icon's
+     * left, top, width and height in [v], and the launch display. Here [v] is the screen's host view and the icon's bounds come from [source],
+     * in the window's pixels, so the view's own place in the window is taken off. Trebuchet's allowBGLaunch is for pending intents: left out.
+     */
+    fun getActivityLaunchOptions(v: View, source: LaunchSource): ActivityOptions {
+        val inWindow = IntArray(2).also { v.getLocationInWindow(it) }
+        val bounds = source.icon
+        val left = bounds.left - inWindow[0]
+        val top = bounds.top - inWindow[1]
+        val width = bounds.width()
+        val height = bounds.height()
+        val options = ActivityOptions.makeClipRevealAnimation(v, left, top, width, height)
+        options.launchDisplayId = if (v.display != null) v.display.displayId else Display.DEFAULT_DISPLAY
+        return options
+    }
+
+    /**
+     * ActivityContext.startActivitySafely
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/ActivityContext.java#L416-L466):
+     * the options of the tapped cell, "intent.setSourceBounds(Utilities.getViewBounds(v))" (the cell on the screen), and the start in the app's
+     * own profile (LauncherApps.startMainActivity); on a refusal "Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT)".
+     * Answers whether Android accepted; without a [source] (no cell) the app starts without animation.
+     */
+    fun startActivitySafely(context: Context, component: ComponentName, user: UserHandle, source: LaunchSource?): Boolean {
+        val options = source?.let { getActivityLaunchOptions(it.view, it) }
+        // intent.setSourceBounds(Utilities.getViewBounds(v)): the cell's bounds on the screen.
+        val started = launch(context, component, user, source?.cell, options?.toBundle())
+        if (!started) {
+            Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
+        }
+        return started
+    }
+
+    /**
+     * ItemClickHandler.handleDisabledItemClicked
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/ItemClickHandler.java#L278-L310):
+     * true when the tap on a disabled app is handled here and nothing is started. An app disabled only because it is suspended or its profile
+     * is paused is started anyway: "Framework will tell the user why the app is suspended." Any other disabled app gets the generic message
+     * (Trebuchet's shortcut-specific messages are for shortcuts, left out).
+     */
+    fun handleDisabledItemClicked(entry: AppEntry, context: Context): Boolean {
+        val disabledFlags = entry.runtimeStatusFlags and AppEntry.FLAG_DISABLED_MASK
+        if ((disabledFlags and AppEntry.FLAG_DISABLED_SUSPENDED.inv() and AppEntry.FLAG_DISABLED_QUIET_USER.inv()) == 0) {
+            // If the app is only disabled because of the above flags, launch activity anyway.
+            return false
+        } else {
+            // Otherwise just use a generic error message.
+            Toast.makeText(context, R.string.activity_not_available, Toast.LENGTH_SHORT).show()
+            return true
+        }
+    }
 
     /**
      * Opens Android's App info of the app (where Force stop is). LauncherApps.startAppDetailsActivity, with the

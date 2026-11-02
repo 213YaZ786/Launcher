@@ -79,13 +79,22 @@ object AppActivities {
      * start (exported, enabled, no permission), so a pinned shortcut whose app changed cannot start what was never open to us, and
      * nothing but the component goes in the intent (no action, data or extras). Nothing is logged.
      */
-    fun launch(context: Context, component: ComponentName): Boolean = try {
+    fun launch(context: Context, component: ComponentName, v: LaunchSource? = null): Boolean = try {
         val pm = context.packageManager
         val info = pm.getActivityInfo(component, 0)
         if (!info.exported || !info.enabled || !info.permission.isNullOrEmpty()) {
             false
         } else {
-            context.startActivity(Intent().setComponent(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+            // ActivityContext.startActivitySafely (L431-L445): "options = v != null ? getActivityLaunchOptions(v, item) : ...", the intent with
+            // FLAG_ACTIVITY_NEW_TASK and "intent.setSourceBounds(Utilities.getViewBounds(v))", then "context.startActivity(intent, optsBundle)"
+            // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/ActivityContext.java#L431-L445).
+            val options = v?.let { AppActions.getActivityLaunchOptions(it.view, it) }
+            val optsBundle = options?.toBundle()
+            val intent = Intent().setComponent(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            if (v != null) {
+                intent.sourceBounds = v.cell
+            }
+            context.startActivity(intent, optsBundle)
             true
         }
     } catch (_: Exception) {

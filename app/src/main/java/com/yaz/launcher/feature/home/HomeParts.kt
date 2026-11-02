@@ -7,6 +7,8 @@ package com.yaz.launcher.feature.home
 //   (https://developer.android.com/develop/ui/compose/layouts/basics). The Recents panel is made of it.
 // - HomeActions: what the panels ask of the screen; the stateful HomeScreen answers with AppActions and AppShortcuts.
 import android.content.pm.ShortcutInfo
+import android.graphics.Rect
+import android.view.View
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,15 +26,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toAndroidRect
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
+import com.yaz.launcher.R
 import com.yaz.launcher.data.apps.AppEntry
+import com.yaz.launcher.data.apps.LaunchSource
 import com.yaz.launcher.data.apps.ProfileInfo
 import com.yaz.launcher.data.settings.IconShape
 import com.yaz.launcher.data.settings.PinnedActivity
+import com.yaz.launcher.ui.component.PillMenuState
 import com.yaz.launcher.ui.component.ZoneSurface
 import com.yaz.launcher.ui.icon.IconCache
 import com.yaz.launcher.ui.icon.IconKey
@@ -82,7 +96,9 @@ fun AppIcon(entry: AppEntry, size: Dp, modifier: Modifier = Modifier) {
         // hard edge, which would cut the anti-aliased one again.
         ZoneSurface(shape = shape, modifier = Modifier.size(size)) { }
         picture?.let { ready ->
-            Image(ready, contentDescription = null, modifier = Modifier.size(size))
+            // FastBitmapDrawable.updateFilter: "mPaint.setColorFilter(mIsDisabled ? getDisabledColorFilter(mDisabledAlpha) : mColorFilter)", the badge
+            // keeps the normal filter (mBadge.setColorFilter(getColorFilter())).
+            Image(ready, contentDescription = null, modifier = Modifier.size(size), colorFilter = if (entry.isDisabled()) DisabledColorFilter else null)
             if (badge != null) Image(badge, contentDescription = null, modifier = Modifier.size(size))
         }
         if (marks.update(entry)) UpdateMark(size * 0.36f, Modifier.align(Alignment.BottomStart))
@@ -92,6 +108,99 @@ fun AppIcon(entry: AppEntry, size: Dp, modifier: Modifier = Modifier) {
 
 /** The key of an app in a list: its activity in its profile. */
 fun AppEntry.listKey(): String = "$packageName/$className/$userSerial"
+
+// FastBitmapDrawable's DISABLED_DESATURATION and DISABLED_BRIGHTNESS
+// (https://github.com/LineageOS/android_frameworks_libs_systemui/blob/lineage-22.2/iconloaderlib/src/com/android/launcher3/icons/FastBitmapDrawable.java#L58-L59).
+private const val DISABLED_DESATURATION = 1f
+private const val DISABLED_BRIGHTNESS = 0.5f
+
+/**
+ * FastBitmapDrawable.getDisabledColorFilter(float disabledAlpha)
+ * (https://github.com/LineageOS/android_frameworks_libs_systemui/blob/lineage-22.2/iconloaderlib/src/com/android/launcher3/icons/FastBitmapDrawable.java#L355-L372):
+ * the same matrix, a saturation of 0 concatenated with a brightness one (scale 0.5 on the colours, 127 added), as a Compose ColorFilter.
+ */
+private fun getDisabledColorFilter(disabledAlpha: Float): ColorFilter {
+    val tempBrightnessMatrix = ColorMatrix()
+    val tempFilterMatrix = ColorMatrix()
+
+    tempFilterMatrix.setToSaturation(1f - DISABLED_DESATURATION)
+    val scale = 1 - DISABLED_BRIGHTNESS
+    val brightnessI = (255 * DISABLED_BRIGHTNESS).toInt()
+    val mat = tempBrightnessMatrix.values
+    mat[0] = scale
+    mat[6] = scale
+    mat[12] = scale
+    mat[4] = brightnessI.toFloat()
+    mat[9] = brightnessI.toFloat()
+    mat[14] = brightnessI.toFloat()
+    mat[18] = disabledAlpha
+    // Android's preConcat: this = this x prematrix, which is Compose's timesAssign.
+    tempFilterMatrix.timesAssign(tempBrightnessMatrix)
+    return ColorFilter.colorMatrix(tempFilterMatrix)
+}
+
+/** FastBitmapDrawable.getDisabledColorFilter(): the filter of a disabled app's icon, at full alpha. */
+private val DisabledColorFilter: ColorFilter = getDisabledColorFilter(1f)
+
+/**
+ * The label TalkBack reads for an app's cell: BubbleTextView.applyLabel sets the content description to the item's, "Disabled %1$s" of it when the
+ * item is disabled (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/BubbleTextView.java#L535-L545).
+ * The text drawn stays the plain label.
+ */
+@Composable
+internal fun AppEntry.applyContentDescription(): String =
+    if (isDisabled()) stringResource(R.string.disabled_app_label, contentDescription) else contentDescription
+
+/**
+ * The count of Home presses (MainActivity.homeSignal), carried down to the cells. Launcher.onNewIntent calls AbstractFloatingView.closeAllOpenViewsExcept;
+ * each long press menu here closes by [CloseOnHome] when it changes
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Launcher.java#L1660-L1664).
+ */
+val LocalHomeSignal = compositionLocalOf { 0 }
+
+/** The count of screen-off events (MainActivity.screenOffSignal): Launcher.onScreenOnChanged goes back to the NORMAL state, which has no open view. */
+val LocalScreenOffSignal = compositionLocalOf { 0 }
+
+/** Closes [menu] when Home is pressed or the screen turns off: the floating views Launcher.onNewIntent closes. */
+@Composable
+internal fun CloseOnHome(menu: PillMenuState) {
+    val homeSignal = LocalHomeSignal.current
+    val screenOffSignal = LocalScreenOffSignal.current
+    LaunchedEffect(homeSignal, screenOffSignal) {
+        if (homeSignal > 0 || screenOffSignal > 0) menu.close()
+    }
+}
+
+/**
+ * Where a cell is, for the launch animation: the cell's and its icon's bounds in the window, kept as the layout reports them (no recomposition),
+ * and the [LaunchSource] ActivityContext.getActivityLaunchOptions reads, made when the cell is tapped
+ * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/ActivityContext.java#L486-L507).
+ */
+class LaunchSourceTracker(private val v: View) {
+    private var bounds = Rect()
+    private var icon = Rect()
+
+    // Utilities.getViewBounds (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/Utilities.java#L822-L826)
+    private fun getViewBounds(v: LayoutCoordinates): Rect {
+        val pos = v.positionOnScreen()
+        return Rect(pos.x.toInt(), pos.y.toInt(), pos.x.toInt() + v.size.width, pos.y.toInt() + v.size.height)
+    }
+
+    /** On the cell: its bounds on the screen, as Utilities.getViewBounds gives a view's. */
+    val cell: Modifier = Modifier.onGloballyPositioned { bounds = getViewBounds(it) }
+
+    /** On the cell's icon: the icon's bounds, which the launch grows out of. */
+    val iconBounds: Modifier = Modifier.onGloballyPositioned { icon = it.boundsInWindow().toAndroidRect() }
+
+    /** The source of a tap now; null before the cell was laid out. */
+    fun getActivityLaunchOptions(): LaunchSource? = if (bounds.isEmpty || icon.isEmpty) null else LaunchSource(v, Rect(bounds), Rect(icon))
+}
+
+@Composable
+internal fun rememberLaunchSource(): LaunchSourceTracker {
+    val view = LocalView.current
+    return remember(view) { LaunchSourceTracker(view) }
+}
 
 /**
  * [items] in rows of [columns] equal slots, each row at least [rowHeight] high (a minimum: a longer name makes its row taller),
@@ -115,6 +224,8 @@ fun <T> GridRows(items: List<T>, columns: Int, rowHeight: Dp, modifier: Modifier
 /** What the panels ask of the screen. */
 data class HomeActions(
     val launch: (AppEntry) -> Unit = {},
+    /** Starts the app from the tapped cell, where the launch animation starts ([LaunchSource], null when the cell is not laid out); [launch] by default. */
+    val launchFrom: (AppEntry, LaunchSource?) -> Unit = { entry, _ -> launch(entry) },
     val appInfo: (AppEntry) -> Unit = {},
     val uninstall: (AppEntry) -> Unit = {},
     /** The shortcuts of an app for its long press menu: empty unless this is the default home. Off the main thread. */
@@ -137,7 +248,7 @@ data class HomeActions(
     /** Opens the Activities screen of an app of the main profile (the panel closes). */
     val openActivities: (AppEntry) -> Unit = {},
     /** Starts a pinned activity of the Apps panel's head. */
-    val launchPinned: (PinnedActivity) -> Unit = {},
+    val launchPinned: (PinnedActivity, LaunchSource?) -> Unit = { _, _ -> },
     /** Takes a pinned activity out of the Apps panel. */
     val unpin: (PinnedActivity) -> Unit = {},
     /** Starts the launch activity of a package (the header's missed calls and unread messages). */
