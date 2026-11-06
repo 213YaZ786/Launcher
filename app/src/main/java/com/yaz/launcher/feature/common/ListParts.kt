@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.yaz.launcher.R
+import com.yaz.launcher.feature.home.setInsets
 import com.yaz.launcher.feature.settings.SettingsIcons
 import com.yaz.launcher.ui.component.FloatingAction
 import com.yaz.launcher.ui.component.FloatingFrame
@@ -44,7 +45,9 @@ val ListWidth = 640.dp
 // Settings' frame, https://developer.android.com/develop/ui/compose/lists for the list inside it.
 @Composable
 fun ListFrame(title: String, scroll: ScrollableState, onBack: () -> Unit, content: @Composable (PaddingValues) -> Unit) {
-    BoxWithConstraints(Modifier.fillMaxSize().glassGround(LocalGlass.current, MaterialTheme.colorScheme.background)) {
+    // The ground fills the window; the frame keeps clear of the side bars and the cut-out (ActivityAllAppsContainerView.setInsets' margins,
+    // feature/home/AppsPanel.kt's setInsets: the same container margins for the lists of Hidden apps and Activities).
+    BoxWithConstraints(Modifier.fillMaxSize().glassGround(LocalGlass.current, MaterialTheme.colorScheme.background).setInsets()) {
         FloatingFrame(
             bottom = 0.dp,
             scroll = scroll,

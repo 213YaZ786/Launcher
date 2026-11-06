@@ -56,6 +56,7 @@ import com.yaz.launcher.data.apps.DefaultHome
 import com.yaz.launcher.data.apps.Usage
 import com.yaz.launcher.data.notify.NotificationDots
 import com.yaz.launcher.data.settings.SettingsStore
+import com.yaz.launcher.feature.home.setInsets
 import com.yaz.launcher.ui.component.BoldButton
 import com.yaz.launcher.ui.component.LoadingMark
 import com.yaz.launcher.ui.component.ZoneSurface
@@ -134,6 +135,8 @@ fun GuideContent(
             .fillMaxSize()
             .glassGround(LocalGlass.current, MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
+            // ActivityAllAppsContainerView.setInsets' left and right margins (feature/home/AppsPanel.kt's setInsets): clear of the side bars and the cut-out.
+            .setInsets()
             .padding(horizontal = 24.dp)
     ) {
         Spacer(Modifier.windowInsetsTopHeight(WindowInsets.statusBars))

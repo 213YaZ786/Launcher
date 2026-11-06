@@ -28,6 +28,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -141,7 +148,8 @@ fun AppsPanel(
             .graphicsLayer { alpha = ShadeInterpolation.getContentAlpha(progress()) }
             .then(if (close != null) Modifier.nestedScroll(close) else Modifier)
     ) {
-        BoxWithConstraints(Modifier.fillMaxSize()) {
+        // setInsets' margins: the panel's content keeps clear of the side bars and the cut-out (the panel itself, with its drag, stays flush).
+        BoxWithConstraints(Modifier.fillMaxSize().setInsets()) {
             val density = LocalDensity.current
             val label = MaterialTheme.typography.labelMedium
             val lineHeight = with(density) { label.lineHeight.toDp() }
@@ -244,11 +252,14 @@ fun AppsPanel(
                 // The block of rows is centred in the pane; the grid is as tall as its rows, so each track is one row high. The panel on the
                 // left is the right one mirrored (reverseLayout, https://developer.android.com/develop/ui/compose/lists): its first apps sit
                 // at its right, next to the screen, and a swipe right brings the next columns.
+                // The screen's direction turns a horizontal grid round (its start is on the right in Arabic), so reverseLayout is turned
+                // round with it: the first apps stay where they are, at the left of the right panel and at the right of the left one, and the
+                // drag that closes the panel still starts at the grid's start (HomeContent's gridAtStart is the same in both directions).
                 Column(Modifier.align(Alignment.Center).fillMaxWidth()) {
                     LazyHorizontalGrid(
                         rows = GridCells.Fixed(shownRows),
                         state = grid,
-                        reverseLayout = edge == Panel.LEFT,
+                        reverseLayout = (edge == Panel.LEFT) != (LocalLayoutDirection.current == LayoutDirection.Rtl),
                         modifier = Modifier.fillMaxWidth().height(rowHeight * shownRows)
                     ) {
                         appCells(pinned, state, profiles, currentStates, blocks, columnWidth, iconSize, actions, seen)
@@ -257,6 +268,28 @@ fun AppsPanel(
             }
         }
     }
+}
+
+// ActivityAllAppsContainerView.setInsets: `mInsets.set(insets); MarginLayoutParams mlp = (MarginLayoutParams) getLayoutParams();
+// mlp.leftMargin = insets.left; mlp.rightMargin = insets.right; setLayoutParams(mlp);` the container is kept clear of the system bars and the
+// cut-out on its left and right (a phone on its side: the navigation bar or the camera hole). The insets here are WindowInsets.systemBars and
+// displayCutout, the margins are absolute (left and right whatever the direction of the screen, as Rect.left and Rect.right are). Used by the
+// Apps and Recents panels, side and bottom.
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/ActivityAllAppsContainerView.java#setInsets)
+// not ported: the bottom sheet case (`grid.shouldShowAllAppsOnSheet()` gives 0, the sheet being centred in the screen: our bottom panel is screen
+// wide, not a sheet), applyAdapterSideAndBottomPaddings (the bottom padding is AppsPanel's own, 6711c0f), grid.allAppsLeftRightMargin and the top
+// padding (the header holds the top), InsettableFrameLayout.dispatchInsets (no child view to inset).
+@Composable
+internal fun Modifier.setInsets(): Modifier {
+    val insets = WindowInsets.systemBars.union(WindowInsets.displayCutout)
+    val density = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    val mInsets = insets
+    var mlp = this
+    val leftMargin = with(density) { mInsets.getLeft(density, direction).toDp() }
+    val rightMargin = with(density) { mInsets.getRight(density, direction).toDp() }
+    mlp = mlp.absolutePadding(left = leftMargin, right = rightMargin)
+    return mlp
 }
 
 // The cells of the grid, the same in both directions: the pinned activities, the apps, then each profile's block. A profile starts a new line

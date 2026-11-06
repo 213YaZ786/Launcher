@@ -63,10 +63,12 @@ class LauncherScreenshotTest {
     )
 
     // As captureForDevice: the qualifiers first, then the content set on the activity again.
-    private fun capture(name: String, body: @Composable () -> Unit) {
-        devices.forEach { (device, qualifiers) ->
-            RuntimeEnvironment.setQualifiers(qualifiers)
-            listOf(false, true).forEach { night ->
+    // [rtl] draws the screen right to left, on the phone by day only (one picture): the qualifiers ar and ldrtl set the configuration's locale and layout
+    // direction, which the windows (the edge tabs' dialogs) and Compose's LocalLayoutDirection both follow, as on a phone set to Arabic.
+    private fun capture(name: String, rtl: Boolean = false, body: @Composable () -> Unit) {
+        (if (rtl) devices.take(1) else devices).forEach { (device, qualifiers) ->
+            RuntimeEnvironment.setQualifiers(if (rtl) "ar-ldrtl-$qualifiers" else qualifiers)
+            (if (rtl) listOf(false) else listOf(false, true)).forEach { night ->
                 compose.activity.setContent {
                     CompositionLocalProvider(LocalInspectionMode provides true) {
                         AppTheme(darkTheme = night, dynamicColor = false) {
@@ -95,6 +97,21 @@ class LauncherScreenshotTest {
     @Test
     fun home() = capture("home") {
         Wallpaper { HomeContent(Fixtures.full, ThemeMode.SYSTEM, HomeActions()) }
+    }
+
+    // Right to left (Arabic): the panels and the tabs stay on the edge their swipe comes from, the text and the apps read right to left. Robolectric
+    // places a dialog window's Gravity.START on the left whatever the configuration, so the tab (a dialog window) shows on the left here; on a phone
+    // the window manager reads the configuration (WindowState.isRtl) and puts it on the right. Taken as the
+    // screens above are (Store's StoreScreenshotTest, https://github.com/213YaZ786/Store/blob/main/app/src/test/java/com/yaz/store/StoreScreenshotTest.kt).
+    @Test
+    fun homeRightToLeft() = capture("home_rtl", rtl = true) {
+        Wallpaper { HomeContent(Fixtures.full, ThemeMode.SYSTEM, HomeActions()) }
+    }
+
+    // Same source: Store's StoreScreenshotTest (https://github.com/213YaZ786/Store/blob/main/app/src/test/java/com/yaz/store/StoreScreenshotTest.kt).
+    @Test
+    fun appsPanelRightToLeft() = capture("apps_panel_rtl", rtl = true) {
+        Wallpaper { HomeContent(Fixtures.full, ThemeMode.SYSTEM, HomeActions(), initial = Panel.RIGHT) }
     }
 
     @Test

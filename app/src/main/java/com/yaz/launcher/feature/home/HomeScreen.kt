@@ -113,7 +113,9 @@ import com.yaz.launcher.data.settings.DateMode
 import com.yaz.launcher.data.settings.SwipeDown
 import com.yaz.launcher.ui.component.findActivity
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -333,6 +335,9 @@ fun HomeContent(
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val density = LocalDensity.current
+    // The real direction of the screen, saved before the physical frame below sets it to left to right (Kvaesitso's MusicWidget saves nothing, it
+    // needs no direction inside its provider): the content of each panel gets it back.
+    val direction = LocalLayoutDirection.current
     // Trebuchet's release thresholds (see successProgress and flingVelocityPx in PanelDrag.kt): a fling is over 1 dp per ms; a tablet is
     // a smallest width of 600 dp (DeviceProfile.isTablet).
     val flingVelocity = flingVelocityPx(with(density) { 1.dp.toPx() })
@@ -512,6 +517,21 @@ fun HomeContent(
         PillItem(AppIcons.Settings, stringResource(R.string.menu_settings), PillMotion.WIGGLE) { actions.openSettings() }
     )
     val homeOptions = stringResource(R.string.home_options)
+    // createAccessibilityNodeInfo's "Apps list" (R.string.all_apps_button_label) and its goToState: one per panel the layout has, the open
+    // state the tabs animate to (the bottom one has no tab, the swipe up is its door).
+    val appsListLabel = stringResource(R.string.all_apps_button_label)
+    val recentsLabel = stringResource(R.string.entry_recents)
+    val allApps = listOf(Panel.RIGHT, Panel.LEFT, Panel.BOTTOM).filter { layout.at(it) != PanelKind.NONE }.map { edge ->
+        val label = if (layout.at(edge) == PanelKind.APPS) appsListLabel else recentsLabel
+        val goToState: () -> Unit = {
+            when (edge) {
+                Panel.LEFT -> scope.launch { side.animateTo(Side.LEFT, spring) }
+                Panel.RIGHT -> scope.launch { side.animateTo(Side.RIGHT, spring) }
+                else -> scope.launch { sheet.animateTo(Sheet.OPEN, spring) }
+            }
+        }
+        label to goToState
+    }
     val rootView = LocalView.current
     // The swipe down for the shade, null when off; the edge tabs' windows read it too (they are windows of their own).
     val shadeSwipe: (() -> Unit)? = if (swipeDown == SwipeDown.NOTIFICATIONS) actions.openNotifications else null
@@ -523,6 +543,15 @@ fun HomeContent(
         LocalHomeSignal provides homeSignal,
         LocalScreenOffSignal provides screenOffSignal
     ) {
+    // The frame is physical: the panels move by translationX and AnchoredDraggable offsets, which are left to right whatever the language, and
+    // the gestures read x from the left. So it is laid out left to right, as Kvaesitso's MusicWidget lays out the parts bound to a direction
+    // (its progress bar and its player buttons, CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr)); a panel's edge, an
+    // edge tab's side (CenterStart, CenterEnd) and the anchors then mean the left and the right. The content inside each panel, the header and the
+    // menus get the real [direction] back, so text and the order of the apps read right to left.
+    // (https://github.com/MM2-0/Kvaesitso/blob/main/app/ui/src/main/java/de/mm20/launcher2/ui/launcher/widgets/music/MusicWidget.kt#L172-L174)
+    // (https://github.com/MM2-0/Kvaesitso/blob/main/app/ui/src/main/java/de/mm20/launcher2/ui/launcher/widgets/music/MusicWidget.kt#L323-L331)
+    // not ported: MusicWidget (a music player), CustomActions, CustomActionIcon, NoData and formatTimestamp (the player's own parts).
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val margin = 12.dp
         // The panels start under the header, which holds the system bars' and the cut-out's room itself; before it is measured, the safe top
@@ -540,8 +569,10 @@ fun HomeContent(
         // bottom; the window's bottom inset is the list's own padding (applyAdapterSideAndBottomPaddings, done in AppsPanel). So the bottom Apps
         // panel is as high as the screen under the header, with no bottom margin; Recents keeps appsHeight above.
         // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/ActivityAllAppsContainerView.java#setInsets)
-        // not ported: setInsets' left and right margins (insets.left, insets.right; the panel is screen wide and the grid draws under the side bars),
-        // grid.allAppsLeftRightMargin and the top padding (the header holds the top), InsettableFrameLayout.dispatchInsets (no child view to inset).
+        // setInsets' left and right margins (mlp.leftMargin = insets.left, mlp.rightMargin = insets.right) are AppsPanel's and RecentsPanel's,
+        // each keeping its content clear of the side bars and the cut-out.
+        // not ported: grid.allAppsLeftRightMargin and the top padding (the header holds the top), InsettableFrameLayout.dispatchInsets (no child
+        // view to inset).
         val bottomAppsHeight = (maxHeight - top).coerceAtLeast(0.dp)
         val leftVisible by remember { derivedStateOf { side.offsetOrZero() > 0.5f } }
         val rightVisible by remember { derivedStateOf { side.offsetOrZero() < -0.5f } }
@@ -578,7 +609,6 @@ fun HomeContent(
         // https://developer.android.com/develop/ui/views/touch-and-input/gestures/gesturenav, which reads the mandatory system gesture insets).
         val gestureInsets = WindowInsets.mandatorySystemGestures
         val bottomBand = WindowInsets.mandatorySystemGestures.union(WindowInsets.navigationBars)
-        val direction = LocalLayoutDirection.current
 
         Box(
             Modifier
@@ -673,30 +703,36 @@ fun HomeContent(
                                         }
                                     }
                                 )
-                                .semantics { onLongClick(label = homeOptions) { wallpaperMenu.open(); true } }
+                                // The node's actions only while no panel is open (AccessibilityActionsView is important for accessibility in NORMAL only).
+                                .semantics {
+                                    onLongClick(label = homeOptions) { wallpaperMenu.open(); true }
+                                    customActions = createAccessibilityNodeInfo(allApps, wallpaperItems)
+                                }
                         }
                     )
             ) {
-                PillMenu(wallpaperMenu, wallpaperItems)
+                CompositionLocalProvider(LocalLayoutDirection provides direction) { PillMenu(wallpaperMenu, wallpaperItems) }
             }
 
             // The header, over the scrim and under the panels, in place of the status bar: it shows as far as a panel is open, with the panels'
             // content alpha, and is hidden from accessibility otherwise (it is always composed so that its height is known; it reads nothing
             // and answers no tap while no panel is open).
             val headerShown = leftVisible || rightVisible || bottomVisible || anyOpen
-            PanelHeader(
-                shown = headerShown,
-                dateMode = dateMode,
-                onOpen = panelActions.openPackage,
-                onSettings = panelActions.openSettings,
-                // Shut after a launch from the header, as panelActions wraps openPackage and openSettings.
-                onLaunched = { close() },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .onSizeChanged { headerPx = it.height }
-                    .graphicsLayer { alpha = ShadeInterpolation.getContentAlpha(progress()) }
-                    .then(if (headerShown) Modifier else Modifier.clearAndSetSemantics { })
-            )
+            CompositionLocalProvider(LocalLayoutDirection provides direction) {
+                PanelHeader(
+                    shown = headerShown,
+                    dateMode = dateMode,
+                    onOpen = panelActions.openPackage,
+                    onSettings = panelActions.openSettings,
+                    // Shut after a launch from the header, as panelActions wraps openPackage and openSettings.
+                    onLaunched = { close() },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .onSizeChanged { headerPx = it.height }
+                        .graphicsLayer { alpha = ShadeInterpolation.getContentAlpha(progress()) }
+                        .then(if (headerShown) Modifier else Modifier.clearAndSetSemantics { })
+                )
+            }
 
             // The panels stay composed all the time, as Trebuchet keeps its apps view in the hierarchy and only moves it
             // (AllAppsTransitionController.setProgress sets getAppsViewProgressTranslationY to progress * shiftRange, and its MultiValueAlpha with
@@ -707,6 +743,7 @@ fun HomeContent(
             if (hasLeft) {
                 SidePanel(
                     layout.left, Panel.LEFT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
+                    direction = direction,
                     progress = leftProgress, travelX = { -sideTravel + side.offsetOrZero() },
                     close = remember(side, flingVelocity, sideSuccess) { side.closeWithScroll(Side.LEFT, flingVelocity, sideSuccess) { gridAtStart } },
                     open = leftVisible || side.targetValue == Side.LEFT,
@@ -716,6 +753,7 @@ fun HomeContent(
             if (hasRight) {
                 SidePanel(
                     layout.right, Panel.RIGHT, state, pinned, panelActions, seen, appsGrid, sideWidth, top, bottom,
+                    direction = direction,
                     progress = rightProgress, travelX = { sideTravel + side.offsetOrZero() },
                     close = remember(side, flingVelocity, sideSuccess) { side.closeWithScroll(Side.RIGHT, flingVelocity, sideSuccess) { gridAtStart } },
                     open = rightVisible || side.targetValue == Side.RIGHT,
@@ -723,6 +761,7 @@ fun HomeContent(
                 )
             }
             val bottomOpen = bottomVisible || sheet.targetValue == Sheet.OPEN
+            CompositionLocalProvider(LocalLayoutDirection provides direction) {
             when (layout.bottom) {
                 // Recents at the bottom is a full page too, the same size and travel as Apps.
                 PanelKind.RECENTS -> RecentsPanel(
@@ -756,6 +795,7 @@ fun HomeContent(
                 )
                 PanelKind.NONE -> Unit
             }
+            }
 
             // The tabs on the side edges that have a panel, hidden while a panel is open; the tab opens its panel. The bottom has none: the swipe up.
             if (hasLeft) {
@@ -765,7 +805,7 @@ fun HomeContent(
                     exit = fadeOut() + scaleOut(targetScale = 0.8f),
                     modifier = Modifier.align(Alignment.CenterStart)
                 ) {
-                    EdgeEntry(panelName(layout.left), start = true, visibility = edgeTabs, windowShown = !anyOpen, onSwipeDown = shadeSwipe) {
+                    EdgeEntry(panelName(layout.left), left = true, direction = direction, visibility = edgeTabs, windowShown = !anyOpen, onSwipeDown = shadeSwipe) {
                         scope.launch { side.animateTo(Side.LEFT, spring) }
                     }
                 }
@@ -777,12 +817,13 @@ fun HomeContent(
                     exit = fadeOut() + scaleOut(targetScale = 0.8f),
                     modifier = Modifier.align(Alignment.CenterEnd)
                 ) {
-                    EdgeEntry(panelName(layout.right), start = false, visibility = edgeTabs, windowShown = !anyOpen, onSwipeDown = shadeSwipe) {
+                    EdgeEntry(panelName(layout.right), left = false, direction = direction, visibility = edgeTabs, windowShown = !anyOpen, onSwipeDown = shadeSwipe) {
                         scope.launch { side.animateTo(Side.RIGHT, spring) }
                     }
                 }
             }
         }
+    }
     }
     }
 }
@@ -802,6 +843,8 @@ private fun BoxScope.SidePanel(
     width: Dp,
     top: Dp,
     bottom: Dp,
+    /** The real direction of the screen, given back to the panel's content inside the left to right frame. */
+    direction: LayoutDirection,
     progress: () -> Float,
     travelX: () -> Float,
     close: androidx.compose.ui.input.nestedscroll.NestedScrollConnection,
@@ -811,6 +854,7 @@ private fun BoxScope.SidePanel(
     val left = edge == Panel.LEFT
     // Closed, the panel stays composed off the screen and is hidden from accessibility services.
     val semantics = if (open) Modifier else Modifier.clearAndSetSemantics { }
+    CompositionLocalProvider(LocalLayoutDirection provides direction) {
     when (kind) {
         PanelKind.APPS -> AppsPanel(
             state, pinned, actions, seen, grid,
@@ -839,6 +883,7 @@ private fun BoxScope.SidePanel(
         )
         PanelKind.NONE -> Unit
     }
+    }
 }
 
 /** The name of a panel, the description of its edge tab. */
@@ -855,6 +900,28 @@ private const val MIN_SCRIM_STRENGTH = 1f
 // Trebuchet's DepthController derives the blur from the state's progress the same way:
 // https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/quickstep/src/com/android/launcher3/statehandlers/DepthController.java
 private fun fractionOf(offset: Float, end: Float): Float = if (end.isNaN() || end == 0f) 0f else (offset / end).coerceIn(0f, 1f)
+
+// AccessibilityActionsView.createAccessibilityNodeInfo: the workspace's node carries the action "Apps list" (R.string.all_apps_button_label, performed
+// by goToState(ALL_APPS)), then one action per OptionItem of OptionsPopupView.getOptions (item.label, performed by item.clickListener). Here the node
+// is the wallpaper's (the scrim box that holds the long press): [allApps] holds one entry per panel the layout has, the label and what the tabs do
+// to open it, then [getOptions] are our long press options, Wallpaper and Settings.
+// (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/AccessibilityActionsView.java#createAccessibilityNodeInfo)
+// not ported: performAccessibilityAction (Compose runs the lambda of the custom action that was chosen: goToState and item.clickListener are those
+// lambdas, below), the constructors (a view's), onStateTransitionComplete (setImportantForAccessibility YES only in NORMAL: the actions are on the
+// wallpaper's node only while no panel is open, see HomeContent), keyboardStateManager().setLaunchedFromA11y (no search field here), the stats
+// log of item.eventId (no stats).
+private typealias AccessibilityAction = CustomAccessibilityAction
+
+private fun createAccessibilityNodeInfo(allApps: List<Pair<String, () -> Unit>>, getOptions: List<PillItem>): List<AccessibilityAction> {
+    val info = mutableListOf<AccessibilityAction>()
+    for ((label, goToState) in allApps) {
+        info.add(AccessibilityAction(label) { goToState(); true })
+    }
+    for (item in getOptions) {
+        info.add(AccessibilityAction(item.label) { item.action(); true })
+    }
+    return info
+}
 
 // WorkspaceTouchListener's long press states: STATE_PENDING_PARENT_INFORM is the one between the long press and the next event, which tells the
 // workspace to drop its touch; then STATE_COMPLETED, and every later event is eaten.
@@ -966,15 +1033,19 @@ private fun Modifier.workspaceTouchListener(
 // An entry on the left or right edge: a transparent tap target 48 dp wide (the Core App Quality touch target, reaching inwards from the edge)
 // with the entry's description, so TalkBack finds it. The tab itself, 12 dp by 64 dp, is a window of its own that blurs the wallpaper
 // (ui/component/EdgeTabWindow.kt's EdgeTab, like Samsung Edge panels' handle), shown while no panel is open ([windowShown]).
+// [left] is the physical edge (the frame is left to right): the tap target sits on it, and the tab's window, whose side is a start or an end of the
+// real [direction] (Gravity.START), is given that direction and the side that lands on the same edge.
 @Composable
-private fun EdgeEntry(label: String, start: Boolean, visibility: Int, windowShown: Boolean, onSwipeDown: (() -> Unit)?, onClick: () -> Unit) {
+private fun EdgeEntry(label: String, left: Boolean, direction: LayoutDirection, visibility: Int, windowShown: Boolean, onSwipeDown: (() -> Unit)?, onClick: () -> Unit) {
     Box(
         Modifier
             .size(width = 48.dp, height = 96.dp)
             .sinkClickable(label, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = label },
-        contentAlignment = if (start) Alignment.CenterStart else Alignment.CenterEnd
+        contentAlignment = if (left) Alignment.CenterStart else Alignment.CenterEnd
     ) {
-        EdgeTab(start, visibility, label, windowShown, onClick, onSwipeDown)
+        CompositionLocalProvider(LocalLayoutDirection provides direction) {
+            EdgeTab(left == (direction == LayoutDirection.Ltr), visibility, label, windowShown, onClick, onSwipeDown)
+        }
     }
 }

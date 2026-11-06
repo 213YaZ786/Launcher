@@ -69,7 +69,8 @@ fun RecentsPanel(
     progress: () -> Float = { 1f }
 ) {
     Box(modifier.graphicsLayer { alpha = ShadeInterpolation.getContentAlpha(progress()) }) {
-        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // ActivityAllAppsContainerView.setInsets' margins (AppsPanel.kt's setInsets): the icons keep clear of the side bars and the cut-out.
+        BoxWithConstraints(Modifier.fillMaxSize().setInsets(), contentAlignment = Alignment.Center) {
             when {
                 !state.usageGranted -> EmptyZone(
                     title = stringResource(R.string.recents_usage_title),

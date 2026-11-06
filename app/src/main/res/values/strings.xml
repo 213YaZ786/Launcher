@@ -4,6 +4,8 @@
     <!-- The entries on the screen edges (their descriptions), one per panel -->
     <string name="entry_apps">Apps</string>
     <string name="entry_recents">Recents</string>
+    <!-- TalkBack's action on the wallpaper that opens the Apps panel (Trebuchet's all_apps_button_label) -->
+    <string name="all_apps_button_label">Apps list</string>
 
     <!-- The menu of a long press on the wallpaper -->
     <string name="menu_wallpaper">Wallpaper</string>
