@@ -535,6 +535,13 @@ fun HomeContent(
         val sideWidth = (maxWidth - margin).coerceAtMost(420.dp)
         val sideTravel = with(density) { sideWidth.toPx() }
         val appsHeight = (maxHeight - top - bottom).coerceAtLeast(0.dp)
+        // ActivityAllAppsContainerView.setInsets: the container takes no bottom padding (setPadding(left, top, right, 0)) and reaches the screen's
+        // bottom; the window's bottom inset is the list's own padding (applyAdapterSideAndBottomPaddings, done in AppsPanel). So the bottom Apps
+        // panel is as high as the screen under the header, with no bottom margin; Recents keeps appsHeight above.
+        // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/ActivityAllAppsContainerView.java#setInsets)
+        // not ported: setInsets' left and right margins (insets.left, insets.right; the panel is screen wide and the grid draws under the side bars),
+        // grid.allAppsLeftRightMargin and the top padding (the header holds the top), InsettableFrameLayout.dispatchInsets (no child view to inset).
+        val bottomAppsHeight = (maxHeight - top).coerceAtLeast(0.dp)
         val leftVisible by remember { derivedStateOf { side.offsetOrZero() > 0.5f } }
         val rightVisible by remember { derivedStateOf { side.offsetOrZero() < -0.5f } }
         val bottomVisible by remember { derivedStateOf { sheet.offsetOrZero() < -0.5f } }
@@ -737,11 +744,12 @@ fun HomeContent(
                     progress = bottomProgress,
                     close = remember(sheet, flingVelocity, sheetSuccess) { sheet.closeWithScrollDown(flingVelocity, sheetSuccess) { bottomGridAtTop } },
                     workScroll = workScroll,
+                    // No bottom padding (ActivityAllAppsContainerView#setInsets): the panel ends at the screen's bottom; the travel is unchanged, the
+                    // panel's top still at the header and its height now reaching the screen's bottom, so bottomTravel takes it fully off.
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = bottom)
                         .fillMaxWidth()
-                        .height(appsHeight)
+                        .height(bottomAppsHeight)
                         .graphicsLayer { translationY = bottomTravel + sheet.offsetOrZero() }
                         .then(if (bottomOpen) Modifier else Modifier.clearAndSetSemantics { })
                 )

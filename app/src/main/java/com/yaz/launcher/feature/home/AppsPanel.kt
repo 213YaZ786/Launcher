@@ -80,6 +80,7 @@ import com.yaz.launcher.ui.component.ShadeInterpolation
 import com.yaz.launcher.ui.component.PillItem
 import com.yaz.launcher.ui.component.PillMenu
 import com.yaz.launcher.ui.component.PillMotion
+import com.yaz.launcher.ui.component.navigationBarBottom
 import com.yaz.launcher.ui.component.entrancePop
 import com.yaz.launcher.ui.component.rememberPillMenu
 import com.yaz.launcher.ui.component.sinkClickable
@@ -209,10 +210,23 @@ fun AppsPanel(
                 // (https://developer.android.com/develop/ui/compose/lists, "Lazy grids"), a profile starting a new row (the rest of the
                 // row before it is empty cells), the Settings row the last item over the whole width. The panel closes by a drag down
                 // once the grid is at its top (the [close] connection).
+                //
+                // The panel reaches the screen's bottom and the window's bottom inset is the list's own bottom padding:
+                // ActivityAllAppsContainerView#applyAdapterSideAndBottomPaddings, bottomPadding = Math.max(mInsets.bottom, mNavBarScrimHeight), set
+                // on the adapter holder, whose applyPadding gives the RecyclerView mPadding.bottom (+ bottomOffset, 0 here: no search bar or tab
+                // header under it); the list draws its items into that padding, android:clipToPadding="false" in all_apps_rv_layout.xml (a
+                // Compose lazy grid draws into its contentPadding by default). The last row, Settings, then ends above the navigation bar and the
+                // apps scroll under it.
+                // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/allapps/ActivityAllAppsContainerView.java#applyAdapterSideAndBottomPaddings)
+                // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/res/layout/all_apps_rv_layout.xml)
+                // mNavBarScrimHeight is 0 in the base computeNavBarScrimHeight, so the padding is mInsets.bottom alone.
+                // not ported: computeNavBarScrimHeight override (no nav bar scrim of our own), grid.allAppsPadding.left and right (the cells
+                // fill the width), the work tab's second AdapterHolder (one grid holds every profile).
+                val navigationBarInset = navigationBarBottom()
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(columns),
                     state = grid,
-                    contentPadding = PaddingValues(top = TOP),
+                    contentPadding = PaddingValues(top = TOP, bottom = maxOf(navigationBarInset, 0.dp)),
                     // What scrolls past the panel's top fades out as in SMS (FloatingPane.kt's softTopEdge, the panes kit), its strength the
                     // scroll over the fade length as ScrollView.getTopFadingEdgeStrength
                     // (https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/widget/ScrollView.java).
