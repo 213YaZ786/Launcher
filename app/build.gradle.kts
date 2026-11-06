@@ -17,8 +17,8 @@ android {
         applicationId = "com.yaz.launcher"
         minSdk = 31
         targetSdk = 37
-        versionCode = 14
-        versionName = "0.1.13"
+        versionCode = 15
+        versionName = "0.1.14"
     }
 
     signingConfigs {

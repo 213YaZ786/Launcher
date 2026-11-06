@@ -282,7 +282,7 @@ fun HomeScreen(
 // ItemClickHandler.onClickAppShortcut and startAppShortcutOrInfoActivity, as they run for an app of the list
 // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/ItemClickHandler.java#L355-L399):
 // [v] is the tapped cell, [launcher] the context; the toast of a failed start is ActivityContext.startActivitySafely's.
-private fun onClickAppShortcut(v: LaunchSource?, shortcut: AppEntry, launcher: Context, haptics: Haptics) {
+internal fun onClickAppShortcut(v: LaunchSource?, shortcut: AppEntry, launcher: Context, haptics: Haptics) {
     if (shortcut.isDisabled() && AppActions.handleDisabledItemClicked(shortcut, launcher)) {
         return
     }

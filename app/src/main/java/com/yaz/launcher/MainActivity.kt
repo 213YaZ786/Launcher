@@ -122,7 +122,13 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val alreadyOnHome = hasWindowFocus() && (intent.flags and Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT) != Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT
-        if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) {
+        // boolean isActionMain = Intent.ACTION_MAIN.equals(intent.getAction()): any ACTION_MAIN is the Home press, no category tested, so our own
+        // launcher entry (MAIN + LAUNCHER) closes the open panel too.
+        // not ported: shouldMoveToDefaultScreen and mWorkspace.moveToDefaultScreen (no workspace pages), ACTIVITY_TRACKER.handleNewIntent (no
+        // other activity tracker), handleSplitAnimationGoingToHome, mOverlayManager.hideOverlay and handleGestureContract (no split, overlay or
+        // gesture contract here), INTENT_ACTION_ALL_APPS_TOGGLE and toggleAllAppsSearch (no typed search)
+        val isActionMain = Intent.ACTION_MAIN == intent.action
+        if (isActionMain) {
             homeAnimated = alreadyOnHome
             homeSignal++
         } else if (intent.action == Intent.ACTION_ALL_APPS) {

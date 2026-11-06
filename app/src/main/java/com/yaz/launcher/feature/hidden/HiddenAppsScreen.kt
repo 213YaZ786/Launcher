@@ -6,7 +6,6 @@ package com.yaz.launcher.feature.hidden
 // TrustAppsAdapter.java, a RecyclerView of icon, label and the hidden switch); here the apps hidden are the list, since the apps panel's long press
 // hides. Trebuchet asks for no authentication to open this list (only a "protected" app asks the lock screen to start), so none is asked here.
 // The rows are Passwords' lines with a SwipeRow and a PillMenu (YAZ/Passwords at HEAD, feature/list/ListScreen.kt, EntryItem).
-import android.content.ComponentName
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -25,8 +24,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.yaz.launcher.R
-import com.yaz.launcher.data.apps.AppActions
 import com.yaz.launcher.data.apps.AppEntry
+import com.yaz.launcher.data.apps.LaunchSource
 import com.yaz.launcher.data.apps.LauncherModel
 import com.yaz.launcher.data.apps.LauncherState
 import com.yaz.launcher.data.settings.SettingsStore
@@ -36,6 +35,8 @@ import com.yaz.launcher.feature.home.AppIcon
 import com.yaz.launcher.feature.home.IconStyle
 import com.yaz.launcher.feature.home.LocalIconStyle
 import com.yaz.launcher.feature.home.listKey
+import com.yaz.launcher.feature.home.onClickAppShortcut
+import com.yaz.launcher.feature.home.rememberLaunchSource
 import com.yaz.launcher.navigation.LocalReadableInset
 import com.yaz.launcher.ui.component.BoldIconButton
 import com.yaz.launcher.ui.component.EmptyZone
@@ -62,9 +63,11 @@ fun HiddenAppsScreen(onBack: () -> Unit) {
         HiddenAppsContent(
             state = state,
             onBack = onBack,
-            onLaunch = { entry ->
-                if (!AppActions.launch(context, ComponentName(entry.packageName, entry.className), entry.user)) haptics.reject()
-            },
+            // The Apps panel's path: ItemClickHandler.onClickAppShortcut (handleDisabledItemClicked, then startActivitySafely with the tapped row's launch
+            // options and its activity_not_found toast), HomeScreen's port
+            // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/touch/ItemClickHandler.java#onClickAppShortcut).
+            onLaunch = { entry -> onClickAppShortcut(null, entry, context, haptics) },
+            onLaunchFrom ={ entry, v -> onClickAppShortcut(v, entry, context, haptics) },
             onUnhide = { entry -> model.unhide(entry.packageName) }
         )
     }
@@ -73,7 +76,14 @@ fun HiddenAppsScreen(onBack: () -> Unit) {
 // The screen without the model, so the screenshot test draws it from fixed data: Now in Android's ForYouRoute / ForYouScreen split, the route reads
 // the state, the screen only draws it (https://github.com/android/nowinandroid/blob/main/feature/foryou/impl/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/foryou/impl/ForYouScreen.kt).
 @Composable
-fun HiddenAppsContent(state: LauncherState, onBack: () -> Unit, onLaunch: (AppEntry) -> Unit, onUnhide: (AppEntry) -> Unit) {
+fun HiddenAppsContent(
+    state: LauncherState,
+    onBack: () -> Unit,
+    onLaunch: (AppEntry) -> Unit,
+    onUnhide: (AppEntry) -> Unit,
+    // Starts the app from the tapped row, where the launch animation starts (HomeActions.launchFrom's way); [onLaunch] by default.
+    onLaunchFrom: (AppEntry, LaunchSource?) -> Unit = { entry, _ -> onLaunch(entry) }
+) {
     val list = rememberLazyListState()
     ListFrame(stringResource(R.string.hidden_title), list, onBack) { padding ->
         Box(Modifier.fillMaxSize()) {
@@ -101,7 +111,7 @@ fun HiddenAppsContent(state: LauncherState, onBack: () -> Unit, onLaunch: (AppEn
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         items(state.hidden, key = { it.listKey() }) { entry ->
-                            HiddenItem(entry, onLaunch = { onLaunch(entry) }, onUnhide = { onUnhide(entry) })
+                            HiddenItem(entry, onLaunch = { v -> onLaunchFrom(entry, v) }, onUnhide = { onUnhide(entry) })
                         }
                     }
                 }
@@ -112,8 +122,10 @@ fun HiddenAppsContent(state: LauncherState, onBack: () -> Unit, onLaunch: (AppEn
 
 // One hidden app: SwipeRow around a Box carrying the PillMenu tracker (Passwords' EntryItem). A swipe and the menu both unhide.
 @Composable
-private fun HiddenItem(entry: AppEntry, onLaunch: () -> Unit, onUnhide: () -> Unit) {
+private fun HiddenItem(entry: AppEntry, onLaunch: (LaunchSource?) -> Unit, onUnhide: () -> Unit) {
     val menu = rememberPillMenu()
+    // The row and its icon, where the launch grows from (ActivityContext.getActivityLaunchOptions reads the tapped view and its icon).
+    val launchSource = rememberLaunchSource()
     val haptics = rememberHaptics()
     val unhide = stringResource(R.string.menu_unhide)
     // The row leaves the way it was pushed (removes), then the list drops it.
@@ -121,7 +133,8 @@ private fun HiddenItem(entry: AppEntry, onLaunch: () -> Unit, onUnhide: () -> Un
         Box(menu.tracker) {
             ListRow(
                 title = entry.label,
-                leading = { AppIcon(entry, 48.dp) },
+                modifier = launchSource.cell,
+                leading = { AppIcon(entry, 48.dp, launchSource.iconBounds) },
                 // Trebuchet's TrustAppsAdapter: a visible toggle on every row, its tap inverts the app's visibility
                 // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/lineage/trust/TrustAppsAdapter.java).
                 trailing = {
@@ -130,7 +143,7 @@ private fun HiddenItem(entry: AppEntry, onLaunch: () -> Unit, onUnhide: () -> Un
                     }
                 },
                 onLongClick = menu::open,
-                onClick = onLaunch
+                onClick = { onLaunch(launchSource.getActivityLaunchOptions()) }
             )
             PillMenu(menu, listOf(PillItem(PanelIcons.Visibility, unhide, PillMotion.BOUNCE) { onUnhide() }))
         }

@@ -9,6 +9,7 @@ package com.yaz.launcher.feature.activities
 // Apps panel (ActivityManager's pinned shortcut, shortcut/ShortcutManager.kt and CreateShortcutActivity.kt: its label and the app's icon).
 // The rows are Passwords' lines with a SwipeRow and a PillMenu (YAZ/Passwords at HEAD, feature/list/ListScreen.kt, EntryItem).
 import android.content.ComponentName
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -32,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import com.yaz.launcher.R
 import com.yaz.launcher.data.apps.ActivityModel
 import com.yaz.launcher.data.apps.AppActivities
+import com.yaz.launcher.data.apps.LaunchSource
+import com.yaz.launcher.feature.home.rememberLaunchSource
 import com.yaz.launcher.data.apps.LauncherModel
 import com.yaz.launcher.data.settings.PinnedActivity
 import com.yaz.launcher.data.settings.SettingsStore
@@ -116,8 +119,15 @@ fun ActivitiesScreen(packageName: String, onBack: () -> Unit) {
                             ActivityItem(
                                 activity,
                                 pinned = isPinned(activity),
-                                onLaunch = {
-                                    if (!AppActivities.launch(context, ComponentName(activity.packageName, activity.className))) haptics.reject()
+                                // ActivityContext.startActivitySafely: the tapped row's launch options, and on a refusal
+                                // "Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT)" (AppActivities.launch keeps its own check of the
+                                // activity first: these are explicit activities, not launcher ones, so they start through context.startActivity there)
+                                // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/ActivityContext.java#startActivitySafely).
+                                onLaunch = { v ->
+                                    if (!AppActivities.launch(context, ComponentName(activity.packageName, activity.className), v)) {
+                                        Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
+                                        haptics.reject()
+                                    }
                                 },
                                 onToggle = { toggle(activity) }
                             )
@@ -134,14 +144,17 @@ private const val MAIN_SERIAL = 0L
 // One activity: SwipeRow around a Box carrying the PillMenu tracker (Passwords' EntryItem). Add to Apps by a swipe and by the menu, Remove
 // for one already added. An activity closed to other apps is greyed, without swipe or menu.
 @Composable
-private fun ActivityItem(activity: ActivityModel, pinned: Boolean, onLaunch: () -> Unit, onToggle: () -> Unit) {
+private fun ActivityItem(activity: ActivityModel, pinned: Boolean, onLaunch: (LaunchSource?) -> Unit, onToggle: () -> Unit) {
     val menu = rememberPillMenu()
+    // The row has no icon: it stands for the icon too, so the launch grows out of the row (ActivityContext.getActivityLaunchOptions).
+    val launchSource = rememberLaunchSource()
     val add = stringResource(R.string.menu_add_to_apps)
     val remove = stringResource(R.string.menu_remove_from_apps)
     val name = activity.label?.takeIf { it.isNotBlank() } ?: activity.name
     val row: @Composable () -> Unit = {
         ListRow(
             title = name,
+            modifier = launchSource.cell.then(launchSource.iconBounds),
             second = activity.name,
             third = if (activity.launchable) null else stringResource(R.string.activities_closed),
             enabled = activity.launchable,
@@ -149,7 +162,7 @@ private fun ActivityItem(activity: ActivityModel, pinned: Boolean, onLaunch: () 
                 { Icon(PanelIcons.PushPin, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp)) }
             } else null,
             onLongClick = menu::open,
-            onClick = onLaunch
+            onClick = { onLaunch(launchSource.getActivityLaunchOptions()) }
         )
     }
     if (!activity.launchable) {
