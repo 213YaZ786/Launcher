@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yaz.launcher.R
+import com.yaz.launcher.data.apps.AppActions
 import com.yaz.launcher.data.apps.AppEntry
 import com.yaz.launcher.data.apps.LauncherState
 import com.yaz.launcher.data.apps.ProfileInfo
@@ -475,6 +476,9 @@ private fun AppCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: M
     val description = entry.applyContentDescription()
     val scope = rememberCoroutineScope()
     var shortcuts by remember { mutableStateOf(emptyList<ShortcutInfo>()) }
+    // SecondaryDropTarget.getButtonType: Uninstall is offered only when it answers UNINSTALL (no user restriction, not the private space, not a
+    // system app, an uninstall target); asked with the shortcuts when the menu opens, off the main thread.
+    var buttonType by remember { mutableIntStateOf(AppActions.INVALID) }
     val deepShortcut = stringResource(R.string.action_deep_shortcut)
     val info = stringResource(R.string.menu_app_info)
     val uninstall = stringResource(R.string.menu_uninstall)
@@ -482,16 +486,16 @@ private fun AppCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: M
     val activities = stringResource(R.string.menu_activities)
     val updateInStore = stringResource(R.string.menu_update_in_store)
     val items = shortcuts.map { shortcut ->
-        PillItem(AppIcons.Play, (shortcut.shortLabel ?: shortcut.longLabel ?: shortcut.id).toString(), PillMotion.BOUNCE) { actions.startShortcut(shortcut) }
+        PillItem(AppIcons.Play, (shortcut.shortLabel ?: shortcut.longLabel ?: shortcut.id).toString(), PillMotion.BOUNCE) { actions.startShortcut(shortcut, launchSource.getActivityLaunchOptions()) }
     } + listOfNotNull(
         // An app of ours with an update waiting: Store opens (it shows no page per app).
         if (LocalAppMarks.current.update(entry)) PillItem(AppIcons.ArrowCircleUp, updateInStore, PillMotion.BOUNCE) { actions.openStore() } else null,
         // The activities of an app of the main profile only: another profile's packages are not visible to this app, and an explicit intent
         // could not start an activity there.
         if (entry.profile == ProfileKind.MAIN) PillItem(PanelIcons.Code, activities, PillMotion.BOUNCE) { actions.openActivities(entry) } else null,
-        PillItem(AppIcons.Info, info, PillMotion.WIGGLE) { actions.appInfo(entry) },
+        PillItem(AppIcons.Info, info, PillMotion.WIGGLE) { actions.appInfo(entry, launchSource.getActivityLaunchOptions()) },
         PillItem(PanelIcons.VisibilityOff, hide, PillMotion.WIGGLE) { actions.hide(entry) },
-        PillItem(AppIcons.Delete, uninstall, PillMotion.DROP, danger = true) { actions.uninstall(entry) }
+        if (buttonType == AppActions.UNINSTALL) PillItem(AppIcons.Delete, uninstall, PillMotion.DROP, danger = true) { actions.uninstall(entry) } else null
     )
     Box(modifier.entrancePop(seen, entry.listKey(), index).then(menu.tracker)) {
         Column(
@@ -512,8 +516,10 @@ private fun AppCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen: M
                         // (sorted and cut by sortAndFilterShortcuts inside the query) and posts them to the views on the UI handler when they
                         // arrive; they sit at the head of the menu (a refusal or another home app gives none).
                         shortcuts = emptyList()
+                        buttonType = AppActions.INVALID
                         menu.open()
                         scope.launch { shortcuts = actions.shortcuts(entry) }
+                        scope.launch { buttonType = actions.getButtonType(entry) }
                     },
                     onClick = { actions.launchFrom(entry, launchSource.getActivityLaunchOptions()) }
                 )

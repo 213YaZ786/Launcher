@@ -6,9 +6,15 @@ import android.content.Context
 import com.yaz.launcher.core.common.writeTextAtomically
 import com.yaz.launcher.core.update.UpdateMode
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -119,12 +125,30 @@ data class Settings(
 class SettingsStore(context: Context) {
 
     private val file = File(context.filesDir, "settings.json")
-    private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+    // kotlinx.serialization's Json builder: ignoreUnknownKeys skips a key this version does not know; coerceInputValues treats an invalid value (null for
+    // a non-null property, an unknown enum member) as missing, so the field takes its default and the other fields are kept
+    // (https://github.com/Kotlin/kotlinx.serialization/blob/master/formats/json/commonMain/src/kotlinx/serialization/json/Json.kt#coerceInputValues).
+    private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true; prettyPrint = true }
 
     private val _settings = MutableStateFlow(load())
     val settings: StateFlow<Settings> = _settings.asStateFlow()
 
     val current: Settings get() = _settings.value
+
+    // The writer's queue: Channel.CONFLATED "creates a buffer for a single element and automatically changes the buffer overflow strategy to
+    // DROP_OLDEST", the recipe of its example (a channel of the latest mouse position): a signal waiting is replaced, never piled up. One coroutine on a
+    // single-thread dispatcher (Dispatchers.IO.limitedParallelism(1)) takes the signals and commits, so the file is never written on the main thread
+    // (https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-core/common/src/channels/Channel.kt#CONFLATED).
+    private val queue = Channel<Unit>(Channel.CONFLATED)
+
+    init {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1)).launch {
+            for (signal in queue) {
+                // The value held now is the latest, whatever order the signals came in.
+                Editor(_settings.value).commit()
+            }
+        }
+    }
 
     // Store's SettingsStore.load.
     private fun load(): Settings {
@@ -133,11 +157,38 @@ class SettingsStore(context: Context) {
             .getOrDefault(Settings())
     }
 
-    // Store's SettingsStore.update.
+    // Store's SettingsStore.update, with LauncherPrefs.put's way of writing. MutableStateFlow.update retries on a concurrent change: [transform] is pure.
     fun update(transform: (Settings) -> Settings) {
-        val updated = transform(_settings.value)
-        if (updated == _settings.value) return
-        _settings.value = updated
-        runCatching { file.writeTextAtomically(json.encodeToString(updated)) }
+        var changed = false
+        _settings.update { value ->
+            val updates = transform(value)
+            changed = updates != value
+            updates
+        }
+        if (changed) put(_settings.value)
+    }
+
+    // LauncherPrefsImpl.put and prepareToPutValues: "Stores each of the values provided in SharedPreferences ... Internally, it uses apply, so the caller
+    // cannot assume that the values that have been put are immediately available for use." The value is in memory at once ([update]); one Editor per
+    // file (here the one settings file) applies it. SharedPreferences.apply queues the disk write on one thread, the latest values winning: the
+    // Editor's apply signals the single-thread writer, and the writer commits the value held in memory when it runs.
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/LauncherPrefs.kt#put)
+    // not ported: putSync (a synchronous commit: nothing here waits for the disk)
+    // not ported: get, getInner, has, remove, removeSync, prepareToRemove (the flow is read, the settings are one value with defaults)
+    // not ported: addListener and removeListener (the flow is collected), putValue (one file, one type), chooseSharedPreferences (one file)
+    private fun put(itemsToValues: Settings): Unit = prepareToPutValues(itemsToValues).forEach { it.apply() }
+
+    private fun prepareToPutValues(updates: Settings): List<Editor> = arrayListOf(Editor(updates))
+
+    private inner class Editor(private val value: Settings) {
+        /** Queues the write of the file; returns at once. */
+        fun apply() {
+            queue.trySend(Unit)
+        }
+
+        /** Writes the file atomically on the calling thread, which is the writer's. */
+        fun commit() {
+            runCatching { file.writeTextAtomically(json.encodeToString(value)) }
+        }
     }
 }

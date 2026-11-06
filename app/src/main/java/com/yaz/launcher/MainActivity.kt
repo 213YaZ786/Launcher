@@ -60,10 +60,17 @@ class MainActivity : ComponentActivity() {
     private var appsSignal by mutableIntStateOf(0)
     private var appsTab by mutableStateOf<Int?>(null)
 
+    // How many times Android's Default apps screen (its gear) or an app asked for the settings with ACTION_APPLICATION_PREFERENCES; LauncherApp opens
+    // the Settings route when it goes up.
+    private var settingsSignal by mutableIntStateOf(0)
+
     // Store's MainActivity.onCreate.
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // Trebuchet's AndroidManifest-common.xml gives SettingsActivity the APPLICATION_PREFERENCES filter, so the gear of Default apps opens it. Settings
+        // is a route of this activity: the intent that starts it here opens the route (onNewIntent does the same for the running activity).
+        if (intent?.action == Intent.ACTION_APPLICATION_PREFERENCES) settingsSignal++
         lifecycle.addObserver(LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> model.start(this)
@@ -79,7 +86,7 @@ class MainActivity : ComponentActivity() {
         val systemUiController = SystemUiController(window, window.decorView)
         setContent {
             CompositionLocalProvider(LocalWallpaperColorHints provides hintsOfWallpaper.hints, LocalSystemUiController provides systemUiController) {
-                AppSurface { LauncherApp(homeSignal, homeAnimated, screenOffSignal, appsSignal, appsTab) { appsTab = null } }
+                AppSurface { LauncherApp(homeSignal, homeAnimated, screenOffSignal, appsSignal, appsTab, settingsSignal) { appsTab = null } }
             }
         }
     }
@@ -139,6 +146,9 @@ class MainActivity : ComponentActivity() {
             homeAnimated = alreadyOnHome
             appsTab = AdapterHolder.WORK
             appsSignal++
+        } else if (intent.action == Intent.ACTION_APPLICATION_PREFERENCES) {
+            // The gear of Android's Default apps (AndroidManifest-common.xml: APPLICATION_PREFERENCES on the settings activity).
+            settingsSignal++
         }
     }
 }

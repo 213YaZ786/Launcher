@@ -46,6 +46,7 @@ import com.yaz.launcher.LocalSystemUiController
 import com.yaz.launcher.LocalWallpaperColorHints
 import com.yaz.launcher.R
 import com.yaz.launcher.SystemUiController
+import com.yaz.launcher.data.apps.AppActions
 import com.yaz.launcher.data.apps.AppEntry
 import com.yaz.launcher.supportsDarkText
 import com.yaz.launcher.data.apps.LaunchSource
@@ -236,11 +237,25 @@ data class HomeActions(
     val launch: (AppEntry) -> Unit = {},
     /** Starts the app from the tapped cell, where the launch animation starts ([LaunchSource], null when the cell is not laid out); [launch] by default. */
     val launchFrom: (AppEntry, LaunchSource?) -> Unit = { entry, _ -> launch(entry) },
-    val appInfo: (AppEntry) -> Unit = {},
+    /**
+     * Opens App info of the app. The [LaunchSource] is the app's cell (SystemShortcut.AppInfo.onClick's view: sourceBounds and launch options),
+     * null when the cell is not laid out.
+     */
+    val appInfo: (AppEntry, LaunchSource?) -> Unit = { _, _ -> },
     val uninstall: (AppEntry) -> Unit = {},
+    /**
+     * What the Uninstall entry of an app's menu may be: SecondaryDropTarget.getButtonType, [AppActions.UNINSTALL] or [AppActions.INVALID] (no entry).
+     * Off the main thread.
+     */
+    val getButtonType: suspend (AppEntry) -> Int = { AppActions.UNINSTALL },
     /** The shortcuts of an app for its long press menu: empty unless this is the default home. Off the main thread. */
     val shortcuts: suspend (AppEntry) -> List<ShortcutInfo> = { emptyList() },
-    val startShortcut: (ShortcutInfo) -> Unit = {},
+    /**
+     * Starts a shortcut from the app's cell: ActivityContext.startActivitySafely's shortcut branch gets the cell's [LaunchSource] (sourceBounds and
+     * launch options), null when it is not laid out
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/ActivityContext.java#startActivitySafely).
+     */
+    val startShortcut: (ShortcutInfo, LaunchSource?) -> Unit = { _, _ -> },
     val removeFromRecents: (AppEntry) -> Unit = {},
     /** Opens Store (the menu item of an app with an update waiting). */
     val openStore: () -> Unit = {},

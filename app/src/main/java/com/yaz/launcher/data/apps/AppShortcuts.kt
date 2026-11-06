@@ -1,11 +1,14 @@
 package com.yaz.launcher.data.apps
 
 import android.content.ComponentName
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.pm.LauncherApps
 import android.content.pm.ShortcutInfo
 import android.os.Bundle
 import android.os.UserHandle
+import android.widget.Toast
+import com.yaz.launcher.R
 
 /**
  * The shortcuts an app publishes (the entries of its long press menu: "New message", "Compose"), at most four.
@@ -96,20 +99,37 @@ object AppShortcuts {
         return filtered
     }
 
-    /**
-     * Starts a shortcut. LauncherApps.startShortcut, as Taskbar's launchShortcut calls it when the app is the host
-     * (https://github.com/farmerbb/Taskbar/blob/master/app/src/main/java/com/farmerbb/taskbar/util/U.java, l.589). False when Android refuses.
-     */
-    fun start(context: Context, shortcut: ShortcutInfo, sourceBounds: android.graphics.Rect? = null, options: Bundle? = null): Boolean {
+    // ActivityContext.startActivitySafely, the shortcut branch: the options of the touched view (getActivityLaunchOptions) and
+    // "intent.setSourceBounds(Utilities.getViewBounds(v))" (the cell [source] on the screen), then
+    // "startShortcut(packageName, id, intent.getSourceBounds(), optsBundle, user)"; "catch (NullPointerException | ActivityNotFoundException | SecurityException e)"
+    // shows "Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT)". Answers whether Android accepted; false too when this app is
+    // not the shortcut host (hasHostPermission). Differences: [source] is the app's cell, not the menu row (the menu is a dialog window, the launch
+    // grows out of the cell in the screen's window); IllegalStateException (a locked profile) is caught as this app always did; the safe mode check,
+    // WIDGETS_ENABLED, the intent branches (startActivity, startMainActivity: AppActions.startActivitySafely has them), the logging and the end
+    // callback are not ported.
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/views/ActivityContext.java#startActivitySafely)
+    fun start(context: Context, shortcut: ShortcutInfo, source: LaunchSource?): Boolean {
         if (!hasHostPermission(context)) return false
+        val options = source?.let { AppActions.getActivityLaunchOptions(it.view, it) }
+        val optsBundle: Bundle? = options?.toBundle()
+        val sourceBounds = source?.cell
+        val user = shortcut.userHandle
         return try {
-            context.getSystemService(LauncherApps::class.java).startShortcut(shortcut, sourceBounds, options)
+            val id = shortcut.id
+            val packageName = shortcut.`package`
+            context.getSystemService(LauncherApps::class.java).startShortcut(packageName, id, sourceBounds, optsBundle, user)
             true
-        } catch (_: android.content.ActivityNotFoundException) {
+        } catch (_: NullPointerException) {
+            Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
+            false
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
             false
         } catch (_: SecurityException) {
+            Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
             false
         } catch (_: IllegalStateException) {
+            Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
             false
         }
     }

@@ -205,7 +205,7 @@ class AppsRepository(
     }
 
     /**
-     * The disabled flags an activity has when it is loaded: FLAG_DISABLED_SUSPENDED when its application is suspended
+     * The runtime flags an activity has when it is loaded: FLAG_SYSTEM_YES or FLAG_SYSTEM_NO, and FLAG_DISABLED_SUSPENDED when its application is suspended
      * (ApplicationInfo.FLAG_SUSPENDED), FLAG_DISABLED_QUIET_USER when its profile is paused or locked (UserManagerState.isUserQuiet, which
      * PackageUpdatedTask OP_USER_AVAILABILITY_CHANGE sets on the user's items)
      * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/PackageUpdatedTask.java#L174-L190).
@@ -214,6 +214,12 @@ class AppsRepository(
         var runtimeStatusFlags = 0
         if (info.applicationInfo.flags and ApplicationInfo.FLAG_SUSPENDED != 0) runtimeStatusFlags = runtimeStatusFlags or AppEntry.FLAG_DISABLED_SUSPENDED
         if (profile.quiet) runtimeStatusFlags = runtimeStatusFlags or AppEntry.FLAG_DISABLED_QUIET_USER
+        // AppInfo.updateRuntimeFlagsForActivityTarget: "info.runtimeStatusFlags |= appInfo.isSystem() ? FLAG_SYSTEM_YES : FLAG_SYSTEM_NO", ApplicationInfoWrapper.isSystem
+        // being ApplicationInfo.FLAG_SYSTEM
+        // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/data/AppInfo.java#AppInfo).
+        // Not ported: the archived, not-pinnable, progress, non-resizeable and multi-instance flags (nothing here reads them).
+        runtimeStatusFlags = runtimeStatusFlags or
+            (if (info.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) AppEntry.FLAG_SYSTEM_YES else AppEntry.FLAG_SYSTEM_NO)
         return runtimeStatusFlags
     }
 

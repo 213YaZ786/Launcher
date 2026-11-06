@@ -8,14 +8,17 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
+import android.content.pm.ApplicationInfo
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.UserHandle
 import android.os.UserManager
+import android.util.ArrayMap
 import android.view.Display
 import android.view.View
 import android.widget.Toast
@@ -99,13 +102,114 @@ object AppActions {
         }
     }
 
+    // SystemShortcut.AppInfo.onClick, named appInfo here: "Rect sourceBounds = Utilities.getViewBounds(view)" (the cell [source] on the screen) and the
+    // activity options of that view ([getActivityLaunchOptions]), then PackageManagerHelper.startDetailsActivityForInfo. Differences: the view is the
+    // app's cell, not the menu row (the menu is a dialog window, the launch grows out of the cell in the screen's window); options.onEndCallback and
+    // its dismissTaskMenuView (the menu closes at once here) and the stats log are left out.
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/popup/SystemShortcut.java#AppInfo)
+    // not ported: createAccessibilityAction and SplitAccessibilityInfo (overview's split-screen a11y; the menu row has its own label)
+    // not ported: onClick (it is appInfo, below)
+    fun appInfo(context: Context, component: ComponentName, user: UserHandle, source: LaunchSource?): Boolean {
+        val sourceBounds = source?.cell
+        val options = source?.let { getActivityLaunchOptions(it.view, it) }
+        return startDetailsActivityForInfo(context, component, user, sourceBounds, options?.toBundle())
+    }
+
+    // PackageManagerHelper.startDetailsActivityForInfo, for an app: Android's App info of the component (where Force stop is),
+    // LauncherApps.startAppDetailsActivity; a SecurityException or ActivityNotFoundException shows "Toast.makeText(context, R.string.activity_not_found,
+    // Toast.LENGTH_SHORT)". Answers whether Android accepted. The install session branch (FLAG_INSTALL_SESSION_ACTIVE) is left out: no install sessions here.
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/util/PackageManagerHelper.java#startDetailsActivityForInfo)
+    // not ported: getAppInstallerPackage, getAppLaunchIntent, getAppLaunchInfo (nothing here asks them)
+    // not ported: isLauncherAppTarget, supportsMultiInstance, isSameAppForMultiInstance (multi-instance split screen is the system's)
+    // not ported: hasShortcutsPermission (AppShortcuts.hasHostPermission has it), getLoadingProgress (no downloading icons)
+    private fun startDetailsActivityForInfo(context: Context, componentName: ComponentName, user: UserHandle, sourceBounds: Rect?, opts: Bundle?): Boolean = try {
+        context.getSystemService(LauncherApps::class.java).startAppDetailsActivity(componentName, user, sourceBounds, opts)
+        true
+    } catch (_: SecurityException) {
+        Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
+        false
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
+        false
+    } catch (_: IllegalStateException) {
+        // Not in the original: the exception this app's guarded() has always caught (a profile that is not running), shown the same way.
+        Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
+        false
+    }
+
+    // SecondaryDropTarget's CACHE_EXPIRE_TIMEOUT and mUninstallDisabledCache: the restrictions of a user are asked once, then kept for 5 seconds
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/SecondaryDropTarget.java#getButtonType).
+    // not ported: onAlarm (the cache holds the time it ends and is emptied by the next call after it: an Alarm on a handler would be a timer left running)
+    // not ported: onAttachedToWindow and onDetachedFromWindow (they only move the alarm)
+    // not ported: onFinishInflate and setupUi (the drop target's drawable and text; the menu entry has its own)
+    // not ported: setupItemInfo, supportsDrop and supportsAccessibilityDrop (drag and drop; the menu asks getButtonType itself)
+    // not ported: getAccessibilityAction (a drop target's action id)
+    private const val CACHE_EXPIRE_TIMEOUT = 5000L
+    private val mUninstallDisabledCache = ArrayMap<UserHandle, Boolean>(1)
+    private var mCacheExpiresAt = 0L
+
+    // SecondaryDropTarget's button types: nothing to offer, or Uninstall (RECONFIGURE and DISMISS_PREDICTION are for widgets and predicted items).
+    const val INVALID = -1
+    const val UNINSTALL = 1
+
     /**
-     * Opens Android's App info of the app (where Force stop is). LauncherApps.startAppDetailsActivity, with the
-     * exceptions PackageManagerHelper.startDetailsActivityForInfo catches (SecurityException, ActivityNotFoundException)
-     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/util/PackageManagerHelper.java).
+     * SecondaryDropTarget.getButtonType, the branch of an app (an AppEntry is no widget and no predicted item): INVALID when the user's restrictions
+     * (UserManager.getUserRestrictions) have DISALLOW_APPS_CONTROL or DISALLOW_UNINSTALL_APPS, when [info] is in the private space, when it is a
+     * system app, or when it has no uninstall target ([getUninstallTarget]); else UNINSTALL. Binder calls: off the main thread.
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/SecondaryDropTarget.java#getButtonType)
      */
-    fun appInfo(context: Context, component: ComponentName, user: UserHandle, sourceBounds: Rect? = null, options: Bundle? = null): Boolean =
-        guarded { context.getSystemService(LauncherApps::class.java).startAppDetailsActivity(component, user, sourceBounds, options) }
+    fun getButtonType(context: Context, info: AppEntry): Int {
+        var uninstallDisabled: Boolean?
+        synchronized(mUninstallDisabledCache) {
+            // Cancel any pending alarm and set cache expiry after some time
+            val now = SystemClock.uptimeMillis()
+            if (now >= mCacheExpiresAt) mUninstallDisabledCache.clear()
+            mCacheExpiresAt = now + CACHE_EXPIRE_TIMEOUT
+            uninstallDisabled = mUninstallDisabledCache[info.user]
+            if (uninstallDisabled == null) {
+                val userManager = context.getSystemService(Context.USER_SERVICE) as UserManager
+                val restrictions = userManager.getUserRestrictions(info.user)
+                uninstallDisabled = restrictions.getBoolean(UserManager.DISALLOW_APPS_CONTROL, false) ||
+                    restrictions.getBoolean(UserManager.DISALLOW_UNINSTALL_APPS, false)
+                mUninstallDisabledCache[info.user] = uninstallDisabled
+            }
+        }
+        return getButtonType(info, uninstallDisabled == true) { getUninstallTarget(context, info) }
+    }
+
+    /** The rest of [getButtonType] once the user's restrictions are known; [uninstallTarget] is asked last, as the original does. */
+    internal fun getButtonType(info: AppEntry, uninstallDisabled: Boolean, uninstallTarget: () -> ComponentName?): Int {
+        if (uninstallDisabled) {
+            return INVALID
+        }
+        if (info.profile == ProfileKind.PRIVATE) {
+            return INVALID
+        }
+        if ((info.runtimeStatusFlags and AppEntry.FLAG_SYSTEM_MASK) != 0 &&
+            (info.runtimeStatusFlags and AppEntry.FLAG_SYSTEM_NO) == 0
+        ) {
+            return INVALID
+        }
+        if (uninstallTarget() == null) {
+            return INVALID
+        }
+        return UNINSTALL
+    }
+
+    /**
+     * SecondaryDropTarget.getUninstallTarget: the component that should be uninstalled, or null: the app's launch intent resolved in its user
+     * (LauncherApps.resolveActivity), kept only if its application is not a system one. Every entry here is an ITEM_TYPE_APPLICATION.
+     * (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/SecondaryDropTarget.java#getUninstallTarget)
+     */
+    fun getUninstallTarget(context: Context, item: AppEntry): ComponentName? {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setComponent(ComponentName(item.packageName, item.className))
+        val user = item.user
+        val info = context.getSystemService(LauncherApps::class.java).resolveActivity(intent, user)
+        if (info != null && (info.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) == 0) {
+            return info.componentName
+        }
+        return null
+    }
 
     /**
      * Asks Android to uninstall the app, which shows its own confirmation. ACTION_DELETE on the package, the user as

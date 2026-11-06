@@ -194,8 +194,9 @@ fun HomeScreen(
         HomeActions(
             launch = { entry -> onClickAppShortcut(null, entry, context, haptics) },
             launchFrom = { entry, source -> onClickAppShortcut(source, entry, context, haptics) },
-            appInfo = { entry -> if (!AppActions.appInfo(context, ComponentName(entry.packageName, entry.className), entry.user)) haptics.reject() },
+            appInfo = { entry, source -> if (!AppActions.appInfo(context, ComponentName(entry.packageName, entry.className), entry.user, source)) haptics.reject() },
             uninstall = { entry -> if (!AppActions.uninstall(context, ComponentName(entry.packageName, entry.className), entry.user)) haptics.reject() },
+            getButtonType = { entry -> withContext(Dispatchers.IO) { AppActions.getButtonType(context, entry) } },
             shortcuts = { entry ->
                 withContext(Dispatchers.IO) {
                     // Android hands the shortcuts to the default home app only: elsewhere none, without an error.
@@ -206,7 +207,7 @@ fun HomeScreen(
                     }
                 }
             },
-            startShortcut = { shortcut -> if (!AppShortcuts.start(context, shortcut)) haptics.reject() },
+            startShortcut = { shortcut, source -> if (!AppShortcuts.start(context, shortcut, source)) haptics.reject() },
             removeFromRecents = { entry -> model.removeFromRecents(entry.packageName) },
             openStore = { if (!StoreMarks.open(context)) haptics.reject() },
             allowUsage = {
@@ -447,8 +448,8 @@ fun HomeContent(
         actions.copy(
             launch = { actions.launch(it); close() },
             launchFrom = { entry, source -> actions.launchFrom(entry, source); close() },
-            appInfo = { actions.appInfo(it); close() },
-            startShortcut = { actions.startShortcut(it); close() },
+            appInfo = { entry, source -> actions.appInfo(entry, source); close() },
+            startShortcut = { shortcut, source -> actions.startShortcut(shortcut, source); close() },
             openStore = { actions.openStore(); close() },
             openActivities = { actions.openActivities(it); close() },
             launchPinned = { pin, source -> actions.launchPinned(pin, source); close() },

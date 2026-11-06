@@ -63,6 +63,8 @@ fun LauncherApp(
     // first, so the routes above Home are left as for a Home press; [appsTab] is the ask itself (an AdapterHolder tab), answered by the home screen.
     appsSignal: Int = 0,
     appsTab: Int? = null,
+    // Goes up each time an intent asks for the settings (ACTION_APPLICATION_PREFERENCES, the gear of Android's Default apps): Settings opens.
+    settingsSignal: Int = 0,
     onAppsTabShown: () -> Unit = {}
 ) {
     val nav = rememberNavController()
@@ -81,6 +83,16 @@ fun LauncherApp(
             withFrameNanos { }
             withFrameNanos { }
             instant = false
+        }
+    }
+
+    // Trebuchet opens its SettingsActivity for APPLICATION_PREFERENCES; here the route, from Home: what is open above Home (Hidden apps, the guide) is left
+    // first, and Settings already in front stays as it is.
+    // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/AndroidManifest-common.xml)
+    LaunchedEffect(settingsSignal) {
+        if (settingsSignal > 0 && nav.currentDestination?.route != Routes.SETTINGS) {
+            nav.popBackStack(Routes.HOME, inclusive = false)
+            nav.navigate(Routes.SETTINGS)
         }
     }
 

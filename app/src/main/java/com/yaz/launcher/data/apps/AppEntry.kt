@@ -50,7 +50,8 @@ data class AppEntry(
     val stamp: String = "",
     /**
      * ItemInfoWithIcon.runtimeStatusFlags (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/data/ItemInfoWithIcon.java):
-     * the FLAG_DISABLED_* bits that hold now (a suspended package, a paused or locked profile).
+     * the FLAG_DISABLED_* bits that hold now (a suspended package, a paused or locked profile), and FLAG_SYSTEM_YES or FLAG_SYSTEM_NO, set when the
+     * entry is loaded (AppInfo.updateRuntimeFlagsForActivityTarget).
      */
     val runtimeStatusFlags: Int = 0,
     /**
@@ -79,6 +80,16 @@ data class AppEntry(
         const val FLAG_DISABLED_QUIET_USER = 1 shl 3
 
         const val FLAG_DISABLED_MASK = FLAG_DISABLED_SUSPENDED or FLAG_DISABLED_QUIET_USER
+
+        // ItemInfoWithIcon's FLAG_SYSTEM_YES, FLAG_SYSTEM_NO and FLAG_SYSTEM_MASK, the same bits
+        // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/model/data/ItemInfoWithIcon.java#L79-L86).
+        /** Indicates that the app is a system app. */
+        const val FLAG_SYSTEM_YES = 1 shl 6
+
+        /** Indicates that the app is not a system app. */
+        const val FLAG_SYSTEM_NO = 1 shl 7
+
+        const val FLAG_SYSTEM_MASK = FLAG_SYSTEM_YES or FLAG_SYSTEM_NO
     }
 }
 

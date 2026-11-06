@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,7 +36,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.yaz.launcher.R
@@ -144,7 +142,7 @@ private fun RecentCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen
         PillItem(AppIcons.Close, remove, PillMotion.DROP) { actions.removeFromRecents(entry) },
         if (LocalAppMarks.current.update(entry)) PillItem(AppIcons.ArrowCircleUp, updateInStore, PillMotion.BOUNCE) { actions.openStore() } else null,
         PillItem(PanelIcons.VisibilityOff, hide, PillMotion.WIGGLE) { actions.hide(entry) },
-        PillItem(AppIcons.Warning, stop, PillMotion.WIGGLE, danger = true) { actions.appInfo(entry) }
+        PillItem(AppIcons.Warning, stop, PillMotion.WIGGLE, danger = true) { actions.appInfo(entry, launchSource.getActivityLaunchOptions()) }
     )
     Box(
         modifier
@@ -170,12 +168,10 @@ private fun RecentCell(entry: AppEntry, iconSize: Dp, actions: HomeActions, seen
                 .padding(horizontal = 2.dp, vertical = CELL_PAD)
         ) {
             AppIcon(entry, iconSize, launchSource.iconBounds)
-            Text(
-                entry.label,
-                style = MaterialTheme.typography.labelMedium,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = LABEL_GAP)
-            )
+            // BubbleTextView.applyLabel / the label's two lines (android:maxLines="2"): AppsPanel's CellLabel, the same label as the Apps panel's cell, so a long name
+            // never makes the row taller than rowHeight
+            // (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/src/com/android/launcher3/BubbleTextView.java#applyLabel).
+            CellLabel(entry.label)
         }
         PillMenu(menu, items)
     }

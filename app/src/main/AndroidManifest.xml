@@ -82,6 +82,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- The gear beside the home app in Android's Default apps: Trebuchet's filter on its settings activity
+                 (https://github.com/LineageOS/android_packages_apps_Trebuchet/blob/lineage-22.2/AndroidManifest-common.xml). Settings is a route of this activity. -->
+            <intent-filter>
+                <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <!-- The notification dots: Android binds this listener only while the user gave it notification access, and only the system can bind it
