@@ -152,13 +152,21 @@
     <!-- The guide -->
     <string name="guide_title">Welcome to Launcher</string>
     <string name="guide_home">Make Launcher your home app</string>
-    <string name="guide_home_action">Make home app</string>
+    <string name="guide_home_name">Home app</string>
+    <string name="guide_home_on">Launcher</string>
+    <string name="guide_home_off">Not chosen</string>
+    <string name="guide_home_summary">Launcher is the screen the Home button opens. Tap to choose it in Android\'s settings.</string>
     <string name="guide_usage">Allow usage access</string>
-    <string name="guide_usage_note">Recents and the order of apps by use need it. Without it, Recents stays empty and apps are listed from A to Z.</string>
-    <string name="guide_usage_action">Open usage access</string>
+    <string name="guide_usage_name">Usage access</string>
+    <string name="guide_usage_summary">Launcher reads which apps you open, for Recents and the order of Apps. Without it, Recents stays empty and apps are listed from A to Z. Tap to open Android\'s usage access page. GutapK can grant it over ADB.</string>
     <string name="guide_dots">Show notification dots</string>
-    <string name="guide_dots_note">Optional. An app with a notification gets a dot on its icon. Without it, dots stay off. GutapK can grant it over ADB: cmd notification allow_listener %1$s</string>
-    <string name="guide_dots_action">Open notification access</string>
+    <string name="guide_dots_name">Notification dots</string>
+    <string name="guide_dots_summary">An app with a notification gets a dot on its icon; this needs notification access. Without it, dots stay off. Tap to open Android\'s notification access page. GutapK can grant it over ADB: cmd notification allow_listener %1$s</string>
+    <string name="guide_allowed">Allowed</string>
+    <string name="guide_not_allowed">Not allowed</string>
+    <string name="guide_on">On</string>
+    <string name="guide_off">Off</string>
+    <string name="guide_needed">Still needed: %1$s</string>
     <string name="guide_finish">Finish</string>
     <string name="done">Done</string>
 </resources>

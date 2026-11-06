@@ -33,6 +33,7 @@ import com.yaz.launcher.feature.home.HomeContent
 import com.yaz.launcher.feature.home.Panel
 import com.yaz.launcher.feature.hidden.HiddenAppsContent
 import com.yaz.launcher.feature.setup.GuideContent
+import com.yaz.launcher.feature.setup.guideTiles
 import com.yaz.launcher.ui.theme.AppTheme
 import org.junit.Rule
 import org.junit.Test
@@ -181,12 +182,19 @@ class LauncherScreenshotTest {
     }
 
     @Test
-    fun guideStart()= capture("guide_start") {
-        GuideContent(home = false, usage = false)
+    fun guideStart() = capture("guide_start") {
+        GuideContent(guideTiles(home = false, usage = false, dots = false))
+    }
+
+    // The home app chosen, the offered tiles still open: Finish is open and the count says two left. Taken as the tests above are (Store's StoreScreenshotTest,
+    // https://github.com/213YaZ786/Store/blob/main/app/src/test/java/com/yaz/store/StoreScreenshotTest.kt).
+    @Test
+    fun guideHome() = capture("guide_home") {
+        GuideContent(guideTiles(home = true, usage = false, dots = false))
     }
 
     @Test
     fun guideDone() = capture("guide_done") {
-        GuideContent(home = true, usage = true)
+        GuideContent(guideTiles(home = true, usage = true, dots = true))
     }
 }

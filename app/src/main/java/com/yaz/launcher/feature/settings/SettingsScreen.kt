@@ -67,6 +67,7 @@ import com.yaz.launcher.data.settings.Settings
 import com.yaz.launcher.data.settings.SettingsStore
 import com.yaz.launcher.data.settings.Swipe
 import com.yaz.launcher.data.settings.ThemeMode
+import com.yaz.launcher.feature.setup.rememberSetupTiles
 import com.yaz.launcher.navigation.LocalReadableInset
 import com.yaz.launcher.navigation.WidthClass
 import com.yaz.launcher.ui.component.BoldButton
@@ -88,6 +89,7 @@ import com.yaz.launcher.ui.component.SettingsTileDialogs
 import com.yaz.launcher.ui.component.SettingsTileGrid
 import com.yaz.launcher.ui.component.ZoneAlertDialog
 import com.yaz.launcher.ui.component.ZoneSurface
+import com.yaz.launcher.ui.component.leftText
 import com.yaz.launcher.ui.component.rememberHaptics
 import com.yaz.launcher.ui.glass.LocalGlass
 import com.yaz.launcher.ui.glass.glassGround
@@ -108,8 +110,12 @@ private const val ABOUT = "about"
 fun SettingsScreen(onBack: () -> Unit, onGuide: () -> Unit, onHidden: () -> Unit) {
     val store: SettingsStore = koinInject()
     val settings by store.settings.collectAsState()
+    // The guide's tile says how many steps are left, read from the system as the guide reads them.
+    // Ported from SettingsScreen of https://github.com/213YaZ786/Language/blob/main/app/src/main/java/com/yaz/language/feature/settings/SettingsScreen.kt#SettingsScreen
+    val setup = rememberSetupTiles()
     SettingsContent(
         settings = settings,
+        guideValue = setup.leftText(),
         onBack = onBack,
         onTheme = { mode -> store.update { it.copy(themeMode = mode) } },
         onIconShape = { shape -> store.update { it.copy(iconShape = shape) } },
@@ -145,7 +151,8 @@ fun SettingsContent(
     onDateMode: (DateMode) -> Unit = {},
     onUpdates: (UpdateMode) -> Unit = {},
     onHidden: () -> Unit = {},
-    onGuide: () -> Unit = {}
+    onGuide: () -> Unit = {},
+    guideValue: String = ""
 ) {
     val context = LocalContext.current
     var dialog by rememberSaveable { mutableStateOf(OpenDialog.NONE) }
@@ -261,7 +268,7 @@ fun SettingsContent(
             // The welcome pages shown again, as Store's About offers (YAZ/Store, feature/settings/SettingsScreen.kt, "guide").
             SettingsActionTile(
                 id = "guide", name = guide, title = guide, icon = AppIcons.Play,
-                value = stringResource(R.string.settings_guide_value), summary = stringResource(R.string.settings_guide_summary),
+                value = guideValue.ifEmpty { stringResource(R.string.settings_guide_value) }, summary = stringResource(R.string.settings_guide_summary),
                 onClick = onGuide
             ),
             // The Updates tile of SMS's About, as is (YAZ/SMS, app/src/main/java/com/yaz/sms/feature/settings/SettingsScreen.kt, "updates").
