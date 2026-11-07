@@ -212,7 +212,7 @@ fun GuideContent(tiles: List<SetupTile>, onFinish: () -> Unit = {}, onExplain: (
         ) {
             Spacer(Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
             Spacer(Modifier.height(40.dp))
-            LoadingMark(size = 120.dp, running = false)
+            LoadingMark(size = 120.dp)
             Spacer(Modifier.height(20.dp))
             // Every title in the accent (the user, 2026-10-31), as Modules' SettingsSectionTitle.
             Text(
